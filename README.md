@@ -48,6 +48,31 @@ The remaining 7 are not marked `@internal` at the class level — `PHPUnit\Frame
 
 `--runner` accepts any class implementing `ParaTest\RunnerInterface`; the class is instantiated with `(Options $options, OutputInterface $output)`. See `test/Unit/ParaTestCommandTest::testAllowCustomRunners` for a working example.
 
+## Custom test run history
+
+ParaTest records test run history through PHPUnit's `@internal` `PHPUnit\Runner\TestRunHistory\TestRunHistory`. To use your own implementation, implement `ParaTest\TestRunHistory\TestRunHistoryFactoryInterface` and set the `PARATEST_TEST_RUN_HISTORY_FACTORY` environment variable to your class name:
+
+```php
+use ParaTest\TestRunHistory\TestRunHistoryFactoryInterface;
+use PHPUnit\Runner\TestRunHistory\TestRunHistory;
+
+final class MyTestRunHistoryFactory implements TestRunHistoryFactoryInterface
+{
+    public function create(string $filepath): TestRunHistory
+    {
+        return new MyTestRunHistory($filepath);
+    }
+}
+```
+
+```
+PARATEST_TEST_RUN_HISTORY_FACTORY=MyTestRunHistoryFactory vendor/bin/paratest
+```
+
+The variable is read in the main process and forwarded to every worker, so your factory is used wherever ParaTest creates a test run history. When it is unset or does not name a class implementing `TestRunHistoryFactoryInterface`, ParaTest falls back to PHPUnit's `DefaultTestRunHistory`.
+
+The result-cache merge performed after an `--order-by=defects` run is the one exception: it is hard-locked to `DefaultTestRunHistory`, because only that class exposes the `mergeWith()` method needed to combine the per-worker cache files. Your factory is not consulted there.
+
 # Usage
 
 After installation, the binary can be found at `vendor/bin/paratest`. Run it

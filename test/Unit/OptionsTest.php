@@ -12,6 +12,7 @@ use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 use function mt_rand;
+use function putenv;
 use function sprintf;
 use function uniqid;
 
@@ -133,6 +134,24 @@ final class OptionsTest extends TestBase
         self::assertSame(1, $env['PARATEST']);
         self::assertArrayNotHasKey(Options::ENV_KEY_TOKEN, $env);
         self::assertArrayNotHasKey(Options::ENV_KEY_UNIQUE_TOKEN, $env);
+    }
+
+    public function testFillEnvWithTokensIncludesTestRunHistoryFactoryWhenSet(): void
+    {
+        $options = $this->createOptionsFromArgv(['--no-test-tokens' => false]);
+
+        putenv(Options::ENV_KEY_TEST_RUN_HISTORY_FACTORY . '=My\\Factory\\Class');
+        try {
+            $env = $options->fillEnvWithTokens(1);
+
+            self::assertSame('My\\Factory\\Class', $env[Options::ENV_KEY_TEST_RUN_HISTORY_FACTORY] ?? null);
+        } finally {
+            putenv(Options::ENV_KEY_TEST_RUN_HISTORY_FACTORY);
+        }
+
+        $env = $options->fillEnvWithTokens(1);
+
+        self::assertArrayNotHasKey(Options::ENV_KEY_TEST_RUN_HISTORY_FACTORY, $env);
     }
 
     public function testNeedsTeamcityGetsActivatedBothByLogTeamcityAndTeamcityFlags(): void

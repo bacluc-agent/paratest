@@ -6,8 +6,10 @@ namespace ParaTest\Tests\Unit\WrapperRunner;
 
 use ParaTest\JUnit\TestSuite;
 use ParaTest\RunnerInterface;
+use ParaTest\TestRunHistory\TestRunHistoryFactory;
 use ParaTest\Tests\TestBase;
 use ParaTest\Tests\TmpDirCreator;
+use ParaTest\Tests\Unit\TestRunHistory\Fixtures\FixtureTestRunHistoryFactory;
 use ParaTest\WrapperRunner\MissingResultsException;
 use ParaTest\WrapperRunner\ResultPrinter;
 use ParaTest\WrapperRunner\WorkerCrashedException;
@@ -40,6 +42,7 @@ use function posix_mkfifo;
 use function preg_match;
 use function preg_match_all;
 use function preg_replace;
+use function putenv;
 use function scandir;
 use function simplexml_load_string;
 use function sort;
@@ -1257,6 +1260,29 @@ EOF;
 
         $runnerResult = $this->runRunner();
         self::assertSame(RunnerInterface::SUCCESS_EXIT, $runnerResult->exitCode);
+    }
+
+    public function testRunWithCustomTestRunHistoryFactory(): void
+    {
+        putenv(TestRunHistoryFactory::ENV_KEY . '=' . FixtureTestRunHistoryFactory::class);
+        FixtureTestRunHistoryFactory::reset();
+
+        $this->bareOptions['--configuration'] = $this->fixture('order_by' . DIRECTORY_SEPARATOR . 'phpunit.xml');
+        $this->bareOptions['--processes']     = '1';
+        $this->bareOptions['--order-by']      = 'defects';
+
+        $runnerResult = $this->runRunner();
+
+        self::assertTrue(FixtureTestRunHistoryFactory::$createCalled);
+        self::assertEquals(RunnerInterface::FAILURE_EXIT, $runnerResult->exitCode);
+    }
+
+    protected function tearDown(): void
+    {
+        putenv(TestRunHistoryFactory::ENV_KEY);
+        FixtureTestRunHistoryFactory::reset();
+
+        parent::tearDown();
     }
 
     private static function sorted(string $from): string

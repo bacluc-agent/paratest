@@ -27,6 +27,7 @@ use function count;
 use function dirname;
 use function escapeshellarg;
 use function file_exists;
+use function getenv;
 use function implode;
 use function is_array;
 use function is_bool;
@@ -54,8 +55,9 @@ use const PHP_INT_MIN;
  */
 final readonly class Options
 {
-    public const string ENV_KEY_TOKEN        = 'TEST_TOKEN';
-    public const string ENV_KEY_UNIQUE_TOKEN = 'UNIQUE_TEST_TOKEN';
+    public const string ENV_KEY_TOKEN                    = 'TEST_TOKEN';
+    public const string ENV_KEY_UNIQUE_TOKEN             = 'UNIQUE_TEST_TOKEN';
+    public const string ENV_KEY_TEST_RUN_HISTORY_FACTORY = 'PARATEST_TEST_RUN_HISTORY_FACTORY';
 
     private const array OPTIONS_TO_KEEP_FOR_PHPUNIT_IN_WORKER = [
         'bootstrap' => true,
@@ -939,13 +941,18 @@ final readonly class Options
         return $passthruAsArguments;
     }
 
-    /** @return array{PARATEST: int, TEST_TOKEN?: int, UNIQUE_TEST_TOKEN?: non-empty-string} */
+    /** @return array{PARATEST: int, TEST_TOKEN?: int, UNIQUE_TEST_TOKEN?: non-empty-string, PARATEST_TEST_RUN_HISTORY_FACTORY?: non-empty-string} */
     public function fillEnvWithTokens(int $inc): array
     {
         $env = ['PARATEST' => 1];
         if (! $this->noTestTokens) {
             $env[self::ENV_KEY_TOKEN]        = $inc;
             $env[self::ENV_KEY_UNIQUE_TOKEN] = uniqid($inc . '_');
+        }
+
+        $testRunHistoryFactory = getenv(self::ENV_KEY_TEST_RUN_HISTORY_FACTORY);
+        if (is_string($testRunHistoryFactory) && $testRunHistoryFactory !== '') {
+            $env[self::ENV_KEY_TEST_RUN_HISTORY_FACTORY] = $testRunHistoryFactory;
         }
 
         return $env;
