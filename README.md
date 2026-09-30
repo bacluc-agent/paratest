@@ -40,7 +40,7 @@ ParaTest 7.x supports PHPUnit `^13.3.5` on PHP `~8.4.0 || ~8.5.0 || ~8.6.0` (see
 
 ## Which PHPUnit classes are internal to ParaTest
 
-`RunnerInterface` is the only non-`@internal` symbol in `src/`. All 51 PHPUnit classes used by ParaTest are implementation details of its runner, and 44 of them are additionally marked `@internal` by PHPUnit itself: everything under `PHPUnit\Event\*`, `PHPUnit\Runner\*` (including `TestRunHistory\*`), `PHPUnit\TestRunner\*`, `PHPUnit\TextUI\*`, `PHPUnit\Logging\TestDox\*`, `PHPUnit\Logging\JUnit\*`, `PHPUnit\Logging\TeamCity\*`, plus `PHPUnit\Util\Color`, `PHPUnit\Framework\TestSuite` and `PHPUnit\Framework\DataProviderTestSuite`.
+`RunnerInterface` is the only non-`@internal` symbol in `src/`. All 51 PHPUnit classes used by ParaTest are implementation details of its runner, and 44 of them are additionally marked `@internal` by PHPUnit itself: every PHPUnit class ParaTest uses except the seven listed below.
 
 The remaining 7 are not marked `@internal` at the class level — `PHPUnit\Framework\Test`, `PHPUnit\Framework\TestCase`, `PHPUnit\Runner\Version`, `PHPUnit\TextUI\Configuration\Builder`, `PHPUnit\TextUI\Configuration\Configuration`, `PHPUnit\TextUI\Output\Default\UnexpectedOutputPrinter` and `PHPUnit\Util\ExcludeList` — but all 7 carry `@no-named-arguments`, so their parameter names are outside PHPUnit's backward-compatibility promise. ParaTest does not treat any of them as a stable contract either.
 
