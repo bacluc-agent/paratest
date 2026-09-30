@@ -29,6 +29,25 @@ This is because of the following reasons:
 1. To reduce bugs, code duplication and incompatibilities with PHPUnit, from version 5 ParaTest heavily relies on PHPUnit `@internal` classes
 1. The fast pace both PHP and PHPUnit have taken recently adds too much maintenance burden, which we can only afford for the latest versions to stay up-to-date
 
+# Compatibility
+
+ParaTest 7.x supports PHPUnit `^13.3.5` on PHP `~8.4.0 || ~8.5.0 || ~8.6.0` (see `composer.json`).
+
+**ParaTest and PHPUnit must always be bumped together.** A ParaTest release supports only the PHPUnit line it was released and tested against, so upgrade ParaTest whenever you upgrade PHPUnit. Running a ParaTest release against a different PHPUnit line can crash the workers outright: the `NullResultCache` removal in PHPUnit 13.3 made every ParaTest worker die with `Class "PHPUnit\Runner\ResultCache\NullResultCache" not found` ([#1124](https://github.com/paratestphp/paratest/issues/1124)) until 7.24.0 and 7.24.1 ported ParaTest to `TestRunHistory`.
+
+- As of 7.24.0 ParaTest uses `PHPUnit\Runner\TestRunHistory\*` (new in PHPUnit 13.3), which replaced the equally `@internal` `PHPUnit\Runner\ResultCache\*` namespace: `DefaultResultCache` → `DefaultTestRunHistory`, `NullResultCache` → `NullTestRunHistory`, `ResultCacheHandler` → `TestRunHistoryHandler`.
+- PHPUnit 13.3 deprecated `--do-not-cache-result` in favour of `--do-not-record-test-run-history`. ParaTest 7.24.1 stopped passing the old option to its workers ([#1128](https://github.com/paratestphp/paratest/pull/1128)).
+
+## Which PHPUnit classes are internal to ParaTest
+
+`RunnerInterface` is the only non-`@internal` symbol in `src/`. All 51 PHPUnit classes used by ParaTest are implementation details of its runner, and 44 of them are additionally marked `@internal` by PHPUnit itself: everything under `PHPUnit\Event\*`, `PHPUnit\Runner\*` (including `TestRunHistory\*`), `PHPUnit\TestRunner\*`, `PHPUnit\TextUI\*`, `PHPUnit\Logging\TestDox\*`, `PHPUnit\Logging\JUnit\*`, `PHPUnit\Logging\TeamCity\*`, plus `PHPUnit\Util\Color`, `PHPUnit\Framework\TestSuite` and `PHPUnit\Framework\DataProviderTestSuite`.
+
+The remaining 7 are not marked `@internal` at the class level — `PHPUnit\Framework\Test`, `PHPUnit\Framework\TestCase`, `PHPUnit\Runner\Version`, `PHPUnit\TextUI\Configuration\Builder`, `PHPUnit\TextUI\Configuration\Configuration`, `PHPUnit\TextUI\Output\Default\UnexpectedOutputPrinter` and `PHPUnit\Util\ExcludeList` — but all 7 carry `@no-named-arguments`, so their parameter names are outside PHPUnit's backward-compatibility promise. ParaTest does not treat any of them as a stable contract either.
+
+## Custom runners
+
+`--runner` accepts any class implementing `ParaTest\RunnerInterface`; the class is instantiated with `(Options $options, OutputInterface $output)`. See `test/Unit/ParaTestCommandTest::testAllowCustomRunners` for a working example.
+
 # Usage
 
 After installation, the binary can be found at `vendor/bin/paratest`. Run it
