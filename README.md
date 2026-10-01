@@ -40,7 +40,7 @@ ParaTest 7.x supports PHPUnit `^13.3.5` on PHP `~8.4.0 || ~8.5.0 || ~8.6.0` (see
 
 ## Which PHPUnit classes are internal to ParaTest
 
-`RunnerInterface` is the only non-`@internal` symbol in `src/`. All 51 PHPUnit classes used by ParaTest are implementation details of its runner, and 44 of them are additionally marked `@internal` by PHPUnit itself: every PHPUnit class ParaTest uses except the seven listed below.
+Three symbols in `src/` are public API and not `@internal`: `ParaTest\RunnerInterface`, `ParaTest\TestRunHistory\TestRunHistoryFactoryInterface` and `ParaTest\TestRunHistory\TestRunHistoryFactory`. All 52 PHPUnit classes used by ParaTest are implementation details of its runner, and 45 of them are additionally marked `@internal` by PHPUnit itself: every PHPUnit class ParaTest uses except the seven listed below.
 
 The remaining 7 are not marked `@internal` at the class level — `PHPUnit\Framework\Test`, `PHPUnit\Framework\TestCase`, `PHPUnit\Runner\Version`, `PHPUnit\TextUI\Configuration\Builder`, `PHPUnit\TextUI\Configuration\Configuration`, `PHPUnit\TextUI\Output\Default\UnexpectedOutputPrinter` and `PHPUnit\Util\ExcludeList` — but all 7 carry `@no-named-arguments`, so their parameter names are outside PHPUnit's backward-compatibility promise. ParaTest does not treat any of them as a stable contract either.
 
@@ -69,9 +69,13 @@ final class MyTestRunHistoryFactory implements TestRunHistoryFactoryInterface
 PARATEST_TEST_RUN_HISTORY_FACTORY=MyTestRunHistoryFactory vendor/bin/paratest
 ```
 
-The variable is read in the main process and forwarded to every worker, so your factory is used wherever ParaTest creates a test run history. When it is unset or does not name a class implementing `TestRunHistoryFactoryInterface`, ParaTest falls back to PHPUnit's `DefaultTestRunHistory`.
+The variable is read in the main process and forwarded to every worker, so your factory is used wherever ParaTest creates a test run history. When it is unset or does not name a class implementing `TestRunHistoryFactoryInterface`, ParaTest falls back to PHPUnit's `DefaultTestRunHistory`. When test run history recording is disabled, ParaTest uses PHPUnit's `NullTestRunHistory` directly (`src/WrapperRunner/SuiteLoader.php:114`) and the factory is not consulted.
 
 The result-cache merge performed after an `--order-by=defects` run is the one exception: it is hard-locked to `DefaultTestRunHistory`, because only that class exposes the `mergeWith()` method needed to combine the per-worker cache files. Your factory is not consulted there.
+
+## Output
+
+`ParaTest\WrapperRunner\ResultPrinter` is `@internal` and deeply coupled to PHPUnit's output subsystem; there is no fine-grained public output extension point. A factory returning the `@internal` printer would force downstream to extend it, and a public interface would drag PHPUnit's `@internal` output types into ParaTest's API. To customize output, provide your own runner via `--runner` (see "Custom runners") — your runner controls all output. A finer-grained output contract is a future design decision.
 
 # Usage
 
