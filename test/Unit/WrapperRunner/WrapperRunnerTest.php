@@ -9,6 +9,7 @@ use ParaTest\RunnerInterface;
 use ParaTest\TestRunHistory\TestRunHistoryFactory;
 use ParaTest\Tests\TestBase;
 use ParaTest\Tests\TmpDirCreator;
+use ParaTest\Tests\Unit\TestRunHistory\Fixtures\FixtureLoggingTestRunHistoryFactory;
 use ParaTest\Tests\Unit\TestRunHistory\Fixtures\FixtureTestRunHistory;
 use ParaTest\Tests\Unit\TestRunHistory\Fixtures\FixtureTestRunHistoryFactory;
 use ParaTest\WrapperRunner\MissingResultsException;
@@ -1306,8 +1307,7 @@ EOF;
 
     public function testWorkerUsesCustomTestRunHistoryFactory(): void
     {
-        putenv(TestRunHistoryFactory::ENV_KEY . '=' . FixtureTestRunHistoryFactory::class);
-        FixtureTestRunHistoryFactory::reset();
+        putenv(TestRunHistoryFactory::ENV_KEY . '=' . FixtureLoggingTestRunHistoryFactory::class);
 
         $this->bareOptions['--configuration']   = $this->fixture('order_by' . DIRECTORY_SEPARATOR . 'phpunit.xml');
         $this->bareOptions['--cache-directory'] = $this->tmpDir;
@@ -1316,14 +1316,14 @@ EOF;
 
         $this->runRunner();
 
-        $callsFile = $this->tmpDir . DIRECTORY_SEPARATOR . FixtureTestRunHistoryFactory::CALLS_FILE;
+        $callsFile = $this->tmpDir . DIRECTORY_SEPARATOR . FixtureLoggingTestRunHistoryFactory::CALLS_FILE;
         self::assertFileExists($callsFile);
         $calls = file($callsFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
         self::assertIsArray($calls);
 
         self::assertContains($this->historyFile(), $calls);
 
-        $workerCalls = preg_grep('/\\/worker_\\d+_stdout_.+_result_cache$/', $calls);
+        $workerCalls = preg_grep('~[\\\\/]worker_\d+_stdout_.+_result_cache$~', $calls);
         self::assertNotEmpty($workerCalls, 'the worker process must build its test run history through the custom factory');
     }
 
