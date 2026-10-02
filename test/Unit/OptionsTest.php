@@ -155,6 +155,18 @@ final class OptionsTest extends TestBase
         self::assertArrayNotHasKey(TestRunHistoryFactory::ENV_KEY, $env);
     }
 
+    public function testFillEnvWithTokensOmitsEmptyTestRunHistoryFactory(): void
+    {
+        $options = $this->createOptionsFromArgv(['--no-test-tokens' => false]);
+
+        putenv(TestRunHistoryFactory::ENV_KEY . '=');
+        try {
+            self::assertArrayNotHasKey(TestRunHistoryFactory::ENV_KEY, $options->fillEnvWithTokens(1));
+        } finally {
+            putenv(TestRunHistoryFactory::ENV_KEY);
+        }
+    }
+
     public function testNeedsTeamcityGetsActivatedBothByLogTeamcityAndTeamcityFlags(): void
     {
         $options = $this->createOptionsFromArgv(['--teamcity' => true], __DIR__);
