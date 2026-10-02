@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace ParaTest\Tests\Unit\TestRunHistory;
 
+use InvalidArgumentException;
 use ParaTest\TestRunHistory\TestRunHistoryFactory;
+use ParaTest\TestRunHistory\TestRunHistoryFactoryInterface;
 use ParaTest\Tests\Unit\TestRunHistory\Fixtures\FixtureTestRunHistory;
 use ParaTest\Tests\Unit\TestRunHistory\Fixtures\FixtureTestRunHistoryFactory;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -16,11 +18,9 @@ use function putenv;
 #[CoversClass(TestRunHistoryFactory::class)]
 final class TestRunHistoryFactoryTest extends TestCase
 {
-    private const string ENV_KEY = 'PARATEST_TEST_RUN_HISTORY_FACTORY';
-
     protected function tearDown(): void
     {
-        putenv(self::ENV_KEY);
+        putenv(TestRunHistoryFactory::ENV_KEY);
         FixtureTestRunHistoryFactory::reset();
 
         parent::tearDown();
@@ -28,7 +28,7 @@ final class TestRunHistoryFactoryTest extends TestCase
 
     public function testCreateReturnsDefaultTestRunHistoryWhenEnvVarNotSet(): void
     {
-        putenv(self::ENV_KEY);
+        putenv(TestRunHistoryFactory::ENV_KEY);
 
         $history = TestRunHistoryFactory::create('/tmp/paratest-test.cache');
 
@@ -37,7 +37,7 @@ final class TestRunHistoryFactoryTest extends TestCase
 
     public function testCreateReturnsCustomHistoryWhenEnvVarSetToValidFactory(): void
     {
-        putenv(self::ENV_KEY . '=' . FixtureTestRunHistoryFactory::class);
+        putenv(TestRunHistoryFactory::ENV_KEY . '=' . FixtureTestRunHistoryFactory::class);
 
         $history = TestRunHistoryFactory::create('/tmp/paratest-test.cache');
 
@@ -46,7 +46,7 @@ final class TestRunHistoryFactoryTest extends TestCase
 
     public function testCreateInvokesCustomFactory(): void
     {
-        putenv(self::ENV_KEY . '=' . FixtureTestRunHistoryFactory::class);
+        putenv(TestRunHistoryFactory::ENV_KEY . '=' . FixtureTestRunHistoryFactory::class);
 
         self::assertFalse(FixtureTestRunHistoryFactory::$createCalled);
 
@@ -55,27 +55,37 @@ final class TestRunHistoryFactoryTest extends TestCase
         self::assertTrue(FixtureTestRunHistoryFactory::$createCalled);
     }
 
-    public function testCreateFallsBackToDefaultWhenEnvVarSetToNonExistentClass(): void
+    public function testCreateThrowsWhenEnvVarSetToNonExistentClass(): void
     {
-        putenv(self::ENV_KEY . '=ParaTest\Tests\Unit\TestRunHistory\Fixtures\NonExistentFactory');
+        putenv(TestRunHistoryFactory::ENV_KEY . '=ParaTest\Tests\Unit\TestRunHistory\Fixtures\NonExistentFactory');
 
-        $history = TestRunHistoryFactory::create('/tmp/paratest-test.cache');
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains(
+            'PARATEST_TEST_RUN_HISTORY_FACTORY is set to '
+            . '"ParaTest\Tests\Unit\TestRunHistory\Fixtures\NonExistentFactory", which is not a class implementing '
+            . TestRunHistoryFactoryInterface::class,
+        );
 
-        self::assertInstanceOf(DefaultTestRunHistory::class, $history);
+        TestRunHistoryFactory::create('/tmp/paratest-test.cache');
     }
 
-    public function testCreateFallsBackToDefaultWhenEnvVarSetToClassNotImplementingInterface(): void
+    public function testCreateThrowsWhenEnvVarSetToClassNotImplementingInterface(): void
     {
-        putenv(self::ENV_KEY . '=' . FixtureTestRunHistory::class);
+        putenv(TestRunHistoryFactory::ENV_KEY . '=' . FixtureTestRunHistory::class);
 
-        $history = TestRunHistoryFactory::create('/tmp/paratest-test.cache');
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessageIsOrContains(
+            'PARATEST_TEST_RUN_HISTORY_FACTORY is set to "'
+            . FixtureTestRunHistory::class . '", which is not a class implementing '
+            . TestRunHistoryFactoryInterface::class,
+        );
 
-        self::assertInstanceOf(DefaultTestRunHistory::class, $history);
+        TestRunHistoryFactory::create('/tmp/paratest-test.cache');
     }
 
     public function testCreateForMergeReturnsNullWhenCustomFactoryConfigured(): void
     {
-        putenv(self::ENV_KEY . '=' . FixtureTestRunHistoryFactory::class);
+        putenv(TestRunHistoryFactory::ENV_KEY . '=' . FixtureTestRunHistoryFactory::class);
         FixtureTestRunHistoryFactory::reset();
 
         self::assertNull(TestRunHistoryFactory::createForMerge('/tmp/paratest-test.cache'));
@@ -84,7 +94,7 @@ final class TestRunHistoryFactoryTest extends TestCase
 
     public function testCreateForMergeReturnsDefaultHistoryWhenNotConfigured(): void
     {
-        putenv(self::ENV_KEY);
+        putenv(TestRunHistoryFactory::ENV_KEY);
 
         self::assertInstanceOf(
             DefaultTestRunHistory::class,

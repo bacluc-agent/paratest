@@ -6,6 +6,7 @@ namespace ParaTest\Tests\Unit;
 
 use InvalidArgumentException;
 use ParaTest\Options;
+use ParaTest\TestRunHistory\TestRunHistoryFactory;
 use ParaTest\Tests\TestBase;
 use ParaTest\WrapperRunner\ShardDistribution;
 use PHPUnit\Framework\Attributes\CoversClass;
@@ -140,18 +141,18 @@ final class OptionsTest extends TestBase
     {
         $options = $this->createOptionsFromArgv(['--no-test-tokens' => false]);
 
-        putenv(Options::ENV_KEY_TEST_RUN_HISTORY_FACTORY . '=My\\Factory\\Class');
+        putenv(TestRunHistoryFactory::ENV_KEY . '=My\\Factory\\Class');
         try {
             $env = $options->fillEnvWithTokens(1);
 
-            self::assertSame('My\\Factory\\Class', $env[Options::ENV_KEY_TEST_RUN_HISTORY_FACTORY] ?? null);
+            self::assertSame('My\\Factory\\Class', $env[TestRunHistoryFactory::ENV_KEY] ?? null);
         } finally {
-            putenv(Options::ENV_KEY_TEST_RUN_HISTORY_FACTORY);
+            putenv(TestRunHistoryFactory::ENV_KEY);
         }
 
         $env = $options->fillEnvWithTokens(1);
 
-        self::assertArrayNotHasKey(Options::ENV_KEY_TEST_RUN_HISTORY_FACTORY, $env);
+        self::assertArrayNotHasKey(TestRunHistoryFactory::ENV_KEY, $env);
     }
 
     public function testNeedsTeamcityGetsActivatedBothByLogTeamcityAndTeamcityFlags(): void

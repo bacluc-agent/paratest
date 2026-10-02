@@ -7,6 +7,7 @@ namespace ParaTest;
 use Fidry\CpuCoreCounter\CpuCoreCounter;
 use Fidry\CpuCoreCounter\NumberOfCpuCoreNotFound;
 use InvalidArgumentException;
+use ParaTest\TestRunHistory\TestRunHistoryFactory;
 use ParaTest\WrapperRunner\ShardDistribution;
 use PHPUnit\TextUI\Configuration\Builder;
 use PHPUnit\TextUI\Configuration\Configuration;
@@ -55,9 +56,8 @@ use const PHP_INT_MIN;
  */
 final readonly class Options
 {
-    public const string ENV_KEY_TOKEN                    = 'TEST_TOKEN';
-    public const string ENV_KEY_UNIQUE_TOKEN             = 'UNIQUE_TEST_TOKEN';
-    public const string ENV_KEY_TEST_RUN_HISTORY_FACTORY = 'PARATEST_TEST_RUN_HISTORY_FACTORY';
+    public const string ENV_KEY_TOKEN        = 'TEST_TOKEN';
+    public const string ENV_KEY_UNIQUE_TOKEN = 'UNIQUE_TEST_TOKEN';
 
     private const array OPTIONS_TO_KEEP_FOR_PHPUNIT_IN_WORKER = [
         'bootstrap' => true,
@@ -950,9 +950,9 @@ final readonly class Options
             $env[self::ENV_KEY_UNIQUE_TOKEN] = uniqid($inc . '_');
         }
 
-        $testRunHistoryFactory = getenv(self::ENV_KEY_TEST_RUN_HISTORY_FACTORY);
+        $testRunHistoryFactory = getenv(TestRunHistoryFactory::ENV_KEY);
         if (is_string($testRunHistoryFactory) && $testRunHistoryFactory !== '') {
-            $env[self::ENV_KEY_TEST_RUN_HISTORY_FACTORY] = $testRunHistoryFactory;
+            $env[TestRunHistoryFactory::ENV_KEY] = $testRunHistoryFactory;
         }
 
         return $env;

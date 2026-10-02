@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace ParaTest\TestRunHistory;
 
+use InvalidArgumentException;
 use PHPUnit\Runner\TestRunHistory\DefaultTestRunHistory;
 use PHPUnit\Runner\TestRunHistory\TestRunHistory;
 
@@ -11,6 +12,7 @@ use function class_exists;
 use function getenv;
 use function is_a;
 use function is_string;
+use function sprintf;
 
 final class TestRunHistoryFactory
 {
@@ -41,15 +43,19 @@ final class TestRunHistoryFactory
     {
         $factoryClass = getenv(self::ENV_KEY);
 
-        if (
-            is_string($factoryClass)
-            && $factoryClass !== ''
-            && class_exists($factoryClass)
-            && is_a($factoryClass, TestRunHistoryFactoryInterface::class, true)
-        ) {
-            return $factoryClass;
+        if (! is_string($factoryClass) || $factoryClass === '') {
+            return null;
         }
 
-        return null;
+        if (! class_exists($factoryClass) || ! is_a($factoryClass, TestRunHistoryFactoryInterface::class, true)) {
+            throw new InvalidArgumentException(sprintf(
+                '%s is set to "%s", which is not a class implementing %s',
+                self::ENV_KEY,
+                $factoryClass,
+                TestRunHistoryFactoryInterface::class,
+            ));
+        }
+
+        return $factoryClass;
     }
 }
