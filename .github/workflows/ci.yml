@@ -6,16 +6,6 @@ on:
     branches:
       - "*.x"
       - "renovate/*"
-  workflow_dispatch:
-    inputs:
-      dependencies:
-        description: "Restrict the test matrix to one dependency set"
-        type: choice
-        options:
-          - all
-          - lowest
-          - highest
-        default: all
 
 permissions:
   contents: read
@@ -78,7 +68,9 @@ jobs:
           - "8.4"
           - "8.5"
           - "8.6"
-        dependencies: ${{ fromJSON(inputs.dependencies == 'lowest' && '["lowest"]' || inputs.dependencies == 'highest' && '["highest"]' || '["lowest", "highest"]') }}
+        dependencies:
+          - "lowest"
+          - "highest"
 
     steps:
       - uses: "actions/checkout@v7"
