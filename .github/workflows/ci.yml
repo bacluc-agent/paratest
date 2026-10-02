@@ -168,7 +168,5 @@ jobs:
           php-version: "${{ matrix.php-version }}"
           ini-values: "${{ env.INI_VALUES }}"
       - uses: "ramsey/composer-install@4.0.0"
-        with:
-          dependency-versions: ${{ inputs.dependencies == 'lowest' && 'lowest' || 'highest' }}
 
       - run: "vendor/bin/phpstan --memory-limit=512M --ansi --no-progress"
