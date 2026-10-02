@@ -55,11 +55,11 @@ ParaTest no longer hard-codes `DefaultTestRunHistory`. `ParaTest\TestRunHistory\
 The factory receives the file path ParaTest would have used and returns the history implementation to record into:
 
 ```php
+namespace App\ParaTest;
+
 use ParaTest\TestRunHistory\TestRunHistoryFactoryInterface;
 use PHPUnit\Runner\TestRunHistory\DefaultTestRunHistory;
 use PHPUnit\Runner\TestRunHistory\TestRunHistory;
-
-namespace App\ParaTest;
 
 final class MyTestRunHistoryFactory implements TestRunHistoryFactoryInterface
 {
