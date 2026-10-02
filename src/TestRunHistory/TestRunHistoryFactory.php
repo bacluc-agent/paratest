@@ -18,6 +18,27 @@ final class TestRunHistoryFactory
 
     public static function create(string $filepath): TestRunHistory
     {
+        $factoryClass = self::configuredFactoryClass();
+
+        if ($factoryClass !== null) {
+            return (new $factoryClass())->create($filepath);
+        }
+
+        return new DefaultTestRunHistory($filepath);
+    }
+
+    public static function createForMerge(string $filepath): ?DefaultTestRunHistory
+    {
+        if (self::configuredFactoryClass() !== null) {
+            return null;
+        }
+
+        return new DefaultTestRunHistory($filepath);
+    }
+
+    /** @return ?class-string<TestRunHistoryFactoryInterface> */
+    private static function configuredFactoryClass(): ?string
+    {
         $factoryClass = getenv(self::ENV_KEY);
 
         if (
@@ -26,14 +47,9 @@ final class TestRunHistoryFactory
             && class_exists($factoryClass)
             && is_a($factoryClass, TestRunHistoryFactoryInterface::class, true)
         ) {
-            return (new $factoryClass())->create($filepath);
+            return $factoryClass;
         }
 
-        return new DefaultTestRunHistory($filepath);
-    }
-
-    public static function createForMerge(string $filepath): DefaultTestRunHistory
-    {
-        return new DefaultTestRunHistory($filepath);
+        return null;
     }
 }

@@ -11,15 +11,20 @@ final class FixtureTestRunHistoryFactory implements TestRunHistoryFactoryInterfa
 {
     public static bool $createCalled = false;
 
+    /** @var list<string> */
+    public static array $createdFilepaths = [];
+
     public static function reset(): void
     {
-        self::$createCalled = false;
+        self::$createCalled     = false;
+        self::$createdFilepaths = [];
     }
 
     public function create(string $filepath): TestRunHistory
     {
-        self::$createCalled = true;
+        self::$createCalled       = true;
+        self::$createdFilepaths[] = $filepath;
 
-        return new FixtureTestRunHistory();
+        return new FixtureTestRunHistory($filepath);
     }
 }

@@ -9,6 +9,7 @@ use ParaTest\RunnerInterface;
 use ParaTest\TestRunHistory\TestRunHistoryFactory;
 use ParaTest\Tests\TestBase;
 use ParaTest\Tests\TmpDirCreator;
+use ParaTest\Tests\Unit\TestRunHistory\Fixtures\FixtureTestRunHistory;
 use ParaTest\Tests\Unit\TestRunHistory\Fixtures\FixtureTestRunHistoryFactory;
 use ParaTest\WrapperRunner\MissingResultsException;
 use ParaTest\WrapperRunner\ResultPrinter;
@@ -1271,10 +1272,35 @@ EOF;
         $this->bareOptions['--processes']     = '1';
         $this->bareOptions['--order-by']      = 'defects';
 
-        $runnerResult = $this->runRunner();
+        $this->runRunner();
 
         self::assertTrue(FixtureTestRunHistoryFactory::$createCalled);
-        self::assertEquals(RunnerInterface::FAILURE_EXIT, $runnerResult->exitCode);
+        self::assertSame([$this->historyFile()], FixtureTestRunHistoryFactory::$createdFilepaths);
+    }
+
+    public function testRunWithCustomTestRunHistoryFactoryDoesNotRewriteHistoryFile(): void
+    {
+        putenv(TestRunHistoryFactory::ENV_KEY . '=' . FixtureTestRunHistoryFactory::class);
+        FixtureTestRunHistoryFactory::reset();
+
+        $this->bareOptions['--configuration'] = $this->fixture('order_by' . DIRECTORY_SEPARATOR . 'phpunit.xml');
+        $this->bareOptions['--processes']     = '1';
+        $this->bareOptions['--order-by']      = 'defects';
+
+        $historyFile = $this->historyFile();
+        file_put_contents($historyFile, FixtureTestRunHistory::SENTINEL);
+
+        $this->runRunner();
+
+        self::assertSame(
+            FixtureTestRunHistory::SENTINEL,
+            file_get_contents($historyFile),
+        );
+    }
+
+    private function historyFile(): string
+    {
+        return $this->createOptionsFromArgv($this->bareOptions)->configuration->testRunHistoryFile();
     }
 
     protected function tearDown(): void

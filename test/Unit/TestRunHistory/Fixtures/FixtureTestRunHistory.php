@@ -8,8 +8,16 @@ use PHPUnit\Framework\TestStatus\TestStatus;
 use PHPUnit\Runner\TestRunHistory\TestRunHistory;
 use PHPUnit\Runner\TestRunHistory\TestRunHistoryId;
 
+use function file_put_contents;
+
 final class FixtureTestRunHistory implements TestRunHistory
 {
+    public const string SENTINEL = 'custom-driver-sentinel';
+
+    public function __construct(private readonly string $filepath)
+    {
+    }
+
     public function setStatus(TestRunHistoryId $id, TestStatus $status): void
     {
     }
@@ -38,9 +46,11 @@ final class FixtureTestRunHistory implements TestRunHistory
 
     public function persist(): void
     {
+        file_put_contents($this->filepath, self::SENTINEL);
     }
 
     public function persistAndPrune(): void
     {
+        $this->persist();
     }
 }

@@ -73,13 +73,22 @@ final class TestRunHistoryFactoryTest extends TestCase
         self::assertInstanceOf(DefaultTestRunHistory::class, $history);
     }
 
-    public function testCreateForMergeIgnoresCustomFactory(): void
+    public function testCreateForMergeReturnsNullWhenCustomFactoryConfigured(): void
     {
         putenv(self::ENV_KEY . '=' . FixtureTestRunHistoryFactory::class);
         FixtureTestRunHistoryFactory::reset();
 
-        TestRunHistoryFactory::createForMerge('/tmp/paratest-test.cache');
-
+        self::assertNull(TestRunHistoryFactory::createForMerge('/tmp/paratest-test.cache'));
         self::assertFalse(FixtureTestRunHistoryFactory::$createCalled);
+    }
+
+    public function testCreateForMergeReturnsDefaultHistoryWhenNotConfigured(): void
+    {
+        putenv(self::ENV_KEY);
+
+        self::assertInstanceOf(
+            DefaultTestRunHistory::class,
+            TestRunHistoryFactory::createForMerge('/tmp/paratest-test.cache'),
+        );
     }
 }

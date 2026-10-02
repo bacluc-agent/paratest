@@ -50,28 +50,37 @@ The remaining 7 are not marked `@internal` at the class level — `PHPUnit\Frame
 
 ## Custom test run history
 
-ParaTest records test run history through PHPUnit's `@internal` `PHPUnit\Runner\TestRunHistory\TestRunHistory`. To use your own implementation, implement `ParaTest\TestRunHistory\TestRunHistoryFactoryInterface` and set the `PARATEST_TEST_RUN_HISTORY_FACTORY` environment variable to your class name:
+ParaTest no longer hard-codes `DefaultTestRunHistory`. `ParaTest\TestRunHistory\TestRunHistoryFactoryInterface` and the `PARATEST_TEST_RUN_HISTORY_FACTORY` environment variable are ParaTest's stable seam: supply your own storage without patching ParaTest or reaching into ParaTest internals.
+
+The factory receives the file path ParaTest would have used and returns the history implementation to record into:
 
 ```php
 use ParaTest\TestRunHistory\TestRunHistoryFactoryInterface;
+use PHPUnit\Runner\TestRunHistory\DefaultTestRunHistory;
 use PHPUnit\Runner\TestRunHistory\TestRunHistory;
+
+namespace App\ParaTest;
 
 final class MyTestRunHistoryFactory implements TestRunHistoryFactoryInterface
 {
     public function create(string $filepath): TestRunHistory
     {
-        return new MyTestRunHistory($filepath);
+        return new DefaultTestRunHistory($filepath);
     }
 }
 ```
 
 ```
-PARATEST_TEST_RUN_HISTORY_FACTORY=MyTestRunHistoryFactory vendor/bin/paratest
+PARATEST_TEST_RUN_HISTORY_FACTORY='App\ParaTest\MyTestRunHistoryFactory' vendor/bin/paratest
 ```
 
-The variable is read in the main process and forwarded to every worker, so your factory is used wherever ParaTest creates a test run history. When it is unset or does not name a class implementing `TestRunHistoryFactoryInterface`, ParaTest falls back to PHPUnit's `DefaultTestRunHistory`. When test run history recording is disabled, ParaTest uses PHPUnit's `NullTestRunHistory` directly (`src/WrapperRunner/SuiteLoader.php:114`) and the factory is not consulted.
+Your class must be autoloadable **in the main process and in every worker**. Workers are separate PHP processes started with ParaTest's bootstrap, so declare the factory in a file that bootstrap already loads — `autoload-dev` in `composer.json` is the usual place. A class only registered from a PHPUnit extension bootstrap is not available to the workers.
 
-The result-cache merge performed after an `--order-by=defects` run is the one exception: it is hard-locked to `DefaultTestRunHistory`, because only that class exposes the `mergeWith()` method needed to combine the per-worker cache files. Your factory is not consulted there.
+The variable is read in the main process and forwarded to every worker, so your factory is used wherever ParaTest creates a test run history. When it is unset or empty, ParaTest uses PHPUnit's `DefaultTestRunHistory`. When it is set but does not name an existing class implementing `TestRunHistoryFactoryInterface`, ParaTest also falls back to `DefaultTestRunHistory`. When test run history recording is disabled, ParaTest uses PHPUnit's `NullTestRunHistory` directly (`src/WrapperRunner/SuiteLoader.php:114`) and the factory is not consulted.
+
+When a custom factory is configured, ParaTest does not merge the workers' history files and does not rewrite the history file — your factory owns that file's contents and its merge. Without this, ParaTest would overwrite your file with its own JSON: the workers wrote your format, `DefaultTestRunHistory` cannot parse it, so nothing would merge and the persisted file would come out empty. Implement the merge yourself if your format needs one.
+
+Note what this seam does and does not buy you: your own `TestRunHistory`/`TestRunHistoryId` implementation is `@internal` and tracks PHPUnit's release line — this seam removes the ParaTest coupling, not the PHPUnit coupling. ParaTest and PHPUnit must still be bumped together (see [Compatibility](#compatibility)).
 
 ## Output
 
