@@ -32,6 +32,7 @@ use function array_unique;
 use function assert;
 use function count;
 use function explode;
+use function file;
 use function file_get_contents;
 use function file_put_contents;
 use function glob;
@@ -40,6 +41,7 @@ use function is_file;
 use function is_string;
 use function min;
 use function posix_mkfifo;
+use function preg_grep;
 use function preg_match;
 use function preg_match_all;
 use function preg_replace;
@@ -54,6 +56,8 @@ use function uniqid;
 use function unlink;
 
 use const DIRECTORY_SEPARATOR;
+use const FILE_IGNORE_NEW_LINES;
+use const FILE_SKIP_EMPTY_LINES;
 use const FIXTURES;
 use const PHP_EOL;
 
@@ -1268,9 +1272,10 @@ EOF;
         putenv(TestRunHistoryFactory::ENV_KEY . '=' . FixtureTestRunHistoryFactory::class);
         FixtureTestRunHistoryFactory::reset();
 
-        $this->bareOptions['--configuration'] = $this->fixture('order_by' . DIRECTORY_SEPARATOR . 'phpunit.xml');
-        $this->bareOptions['--processes']     = '1';
-        $this->bareOptions['--order-by']      = 'defects';
+        $this->bareOptions['--configuration']   = $this->fixture('order_by' . DIRECTORY_SEPARATOR . 'phpunit.xml');
+        $this->bareOptions['--cache-directory'] = $this->tmpDir;
+        $this->bareOptions['--processes']       = '1';
+        $this->bareOptions['--order-by']        = 'defects';
 
         $this->runRunner();
 
@@ -1283,9 +1288,10 @@ EOF;
         putenv(TestRunHistoryFactory::ENV_KEY . '=' . FixtureTestRunHistoryFactory::class);
         FixtureTestRunHistoryFactory::reset();
 
-        $this->bareOptions['--configuration'] = $this->fixture('order_by' . DIRECTORY_SEPARATOR . 'phpunit.xml');
-        $this->bareOptions['--processes']     = '1';
-        $this->bareOptions['--order-by']      = 'defects';
+        $this->bareOptions['--configuration']   = $this->fixture('order_by' . DIRECTORY_SEPARATOR . 'phpunit.xml');
+        $this->bareOptions['--cache-directory'] = $this->tmpDir;
+        $this->bareOptions['--processes']       = '1';
+        $this->bareOptions['--order-by']        = 'defects';
 
         $historyFile = $this->historyFile();
         file_put_contents($historyFile, FixtureTestRunHistory::SENTINEL);
@@ -1296,6 +1302,29 @@ EOF;
             FixtureTestRunHistory::SENTINEL,
             file_get_contents($historyFile),
         );
+    }
+
+    public function testWorkerUsesCustomTestRunHistoryFactory(): void
+    {
+        putenv(TestRunHistoryFactory::ENV_KEY . '=' . FixtureTestRunHistoryFactory::class);
+        FixtureTestRunHistoryFactory::reset();
+
+        $this->bareOptions['--configuration']   = $this->fixture('order_by' . DIRECTORY_SEPARATOR . 'phpunit.xml');
+        $this->bareOptions['--cache-directory'] = $this->tmpDir;
+        $this->bareOptions['--processes']       = '1';
+        $this->bareOptions['--order-by']        = 'defects';
+
+        $this->runRunner();
+
+        $callsFile = $this->tmpDir . DIRECTORY_SEPARATOR . FixtureTestRunHistoryFactory::CALLS_FILE;
+        self::assertFileExists($callsFile);
+        $calls = file($callsFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        self::assertIsArray($calls);
+
+        self::assertContains($this->historyFile(), $calls);
+
+        $workerCalls = preg_grep('/\\/worker_\\d+_stdout_.+_result_cache$/', $calls);
+        self::assertNotEmpty($workerCalls, 'the worker process must build its test run history through the custom factory');
     }
 
     private function historyFile(): string
