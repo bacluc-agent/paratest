@@ -301,7 +301,7 @@ parameters:
 			path: src/WrapperRunner/WrapperWorker.php
 
 		-
-			message: '#^Parameter \#3 \$env of class Symfony\\Component\\Process\\Process constructor expects array\<string, string\|Stringable\|false\>\|null, array\{PARATEST\: int, TEST_TOKEN\?\: int, UNIQUE_TEST_TOKEN\?\: non\-empty\-string\} given\.$#'
+			message: '#^Parameter \#3 \$env of class Symfony\\Component\\Process\\Process constructor expects array\<string, string\|Stringable\|false\>\|null, array\{PARATEST\: int, TEST_TOKEN\?\: int, UNIQUE_TEST_TOKEN\?\: non\-empty\-string, PARATEST_TEST_RUN_HISTORY_FACTORY\?\: non\-empty\-string\} given\.$#'
 			identifier: argument.type
 			count: 1
 			path: src/WrapperRunner/WrapperWorker.php

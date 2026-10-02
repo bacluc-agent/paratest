@@ -6,12 +6,14 @@ namespace ParaTest\Tests\Unit;
 
 use InvalidArgumentException;
 use ParaTest\Options;
+use ParaTest\TestRunHistory\TestRunHistoryFactory;
 use ParaTest\Tests\TestBase;
 use ParaTest\WrapperRunner\ShardDistribution;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 
 use function mt_rand;
+use function putenv;
 use function sprintf;
 use function uniqid;
 
@@ -133,6 +135,36 @@ final class OptionsTest extends TestBase
         self::assertSame(1, $env['PARATEST']);
         self::assertArrayNotHasKey(Options::ENV_KEY_TOKEN, $env);
         self::assertArrayNotHasKey(Options::ENV_KEY_UNIQUE_TOKEN, $env);
+    }
+
+    public function testFillEnvWithTokensIncludesTestRunHistoryFactoryWhenSet(): void
+    {
+        $options = $this->createOptionsFromArgv(['--no-test-tokens' => false]);
+
+        putenv(TestRunHistoryFactory::ENV_KEY . '=My\\Factory\\Class');
+        try {
+            $env = $options->fillEnvWithTokens(1);
+
+            self::assertSame('My\\Factory\\Class', $env[TestRunHistoryFactory::ENV_KEY] ?? null);
+        } finally {
+            putenv(TestRunHistoryFactory::ENV_KEY);
+        }
+
+        $env = $options->fillEnvWithTokens(1);
+
+        self::assertArrayNotHasKey(TestRunHistoryFactory::ENV_KEY, $env);
+    }
+
+    public function testFillEnvWithTokensOmitsEmptyTestRunHistoryFactory(): void
+    {
+        $options = $this->createOptionsFromArgv(['--no-test-tokens' => false]);
+
+        putenv(TestRunHistoryFactory::ENV_KEY . '=');
+        try {
+            self::assertArrayNotHasKey(TestRunHistoryFactory::ENV_KEY, $options->fillEnvWithTokens(1));
+        } finally {
+            putenv(TestRunHistoryFactory::ENV_KEY);
+        }
     }
 
     public function testNeedsTeamcityGetsActivatedBothByLogTeamcityAndTeamcityFlags(): void
