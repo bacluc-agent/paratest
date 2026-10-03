@@ -9,11 +9,11 @@ use ParaTest\JUnit\Writer;
 use ParaTest\Options;
 use ParaTest\RunnerInterface;
 use ParaTest\TestDox\TestDoxResultsMerger;
-use ParaTest\TestRunHistory\TestRunHistoryFactory;
 use PHPUnit\Logging\TestDox\HtmlRenderer as TestDoxHtmlRenderer;
 use PHPUnit\Logging\TestDox\PlainTextRenderer as TestDoxPlainTextRenderer;
 use PHPUnit\Logging\TestDox\TestResultCollection as TestDoxTestResultCollection;
 use PHPUnit\Runner\CodeCoverage;
+use PHPUnit\Runner\TestRunHistory\DefaultTestRunHistory;
 use PHPUnit\TestRunner\TestResult\Facade as TestResultFacade;
 use PHPUnit\TestRunner\TestResult\TestResult;
 use PHPUnit\TextUI\Configuration\CodeCoverageFilterRegistry;
@@ -350,21 +350,15 @@ final class WrapperRunner implements RunnerInterface
         }
 
         if ($this->options->configuration->recordTestRunHistory()) {
-            $resultCacheSum = TestRunHistoryFactory::createForMerge($this->options->configuration->testRunHistoryFile());
-            if ($resultCacheSum !== null) {
-                foreach ($this->resultCacheFiles as $resultCacheFile) {
-                    $resultCache = TestRunHistoryFactory::createForMerge($resultCacheFile->getPathname());
-                    if ($resultCache === null) {
-                        continue;
-                    }
+            $resultCacheSum = new DefaultTestRunHistory($this->options->configuration->testRunHistoryFile());
+            foreach ($this->resultCacheFiles as $resultCacheFile) {
+                $resultCache = new DefaultTestRunHistory($resultCacheFile->getPathname());
+                $resultCache->load();
 
-                    $resultCache->load();
-
-                    $resultCacheSum->mergeWith($resultCache);
-                }
-
-                $resultCacheSum->persist();
+                $resultCacheSum->mergeWith($resultCache);
             }
+
+            $resultCacheSum->persist();
         }
 
         $testdoxResults = (new TestDoxResultsMerger())->getResultsFromTestdoxFiles($this->testdoxFiles);

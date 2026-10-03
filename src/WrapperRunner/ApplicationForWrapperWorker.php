@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace ParaTest\WrapperRunner;
 
 use ParaTest\RunnerInterface;
-use ParaTest\TestRunHistory\TestRunHistoryFactory;
 use PHPUnit\Event\Facade as EventFacade;
 use PHPUnit\Event\TestSuite\TestSuiteBuilder;
 use PHPUnit\Framework\TestSuite;
@@ -21,6 +20,7 @@ use PHPUnit\Runner\Extension\ExtensionBootstrapper;
 use PHPUnit\Runner\Extension\ExtensionFacade;
 use PHPUnit\Runner\Extension\PharLoader;
 use PHPUnit\Runner\Filter\Factory;
+use PHPUnit\Runner\TestRunHistory\DefaultTestRunHistory;
 use PHPUnit\Runner\TestRunHistory\TestRunHistoryHandler;
 use PHPUnit\Runner\TestSuiteLoader;
 use PHPUnit\Runner\TestSuiteSorter;
@@ -211,7 +211,7 @@ final class ApplicationForWrapperWorker
 
         if (isset($this->resultCacheFile)) {
             new TestRunHistoryHandler(
-                TestRunHistoryFactory::create($this->resultCacheFile),
+                new DefaultTestRunHistory($this->resultCacheFile),
                 EventFacade::instance(),
                 false,
             );

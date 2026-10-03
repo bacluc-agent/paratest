@@ -6,12 +6,8 @@ namespace ParaTest\Tests\Unit\WrapperRunner;
 
 use ParaTest\JUnit\TestSuite;
 use ParaTest\RunnerInterface;
-use ParaTest\TestRunHistory\TestRunHistoryFactory;
 use ParaTest\Tests\TestBase;
 use ParaTest\Tests\TmpDirCreator;
-use ParaTest\Tests\Unit\TestRunHistory\Fixtures\FixtureLoggingTestRunHistoryFactory;
-use ParaTest\Tests\Unit\TestRunHistory\Fixtures\FixtureTestRunHistory;
-use ParaTest\Tests\Unit\TestRunHistory\Fixtures\FixtureTestRunHistoryFactory;
 use ParaTest\WrapperRunner\MissingResultsException;
 use ParaTest\WrapperRunner\ResultPrinter;
 use ParaTest\WrapperRunner\WorkerCrashedException;
@@ -33,7 +29,6 @@ use function array_unique;
 use function assert;
 use function count;
 use function explode;
-use function file;
 use function file_get_contents;
 use function file_put_contents;
 use function glob;
@@ -42,11 +37,9 @@ use function is_file;
 use function is_string;
 use function min;
 use function posix_mkfifo;
-use function preg_grep;
 use function preg_match;
 use function preg_match_all;
 use function preg_replace;
-use function putenv;
 use function scandir;
 use function simplexml_load_string;
 use function sort;
@@ -57,8 +50,6 @@ use function uniqid;
 use function unlink;
 
 use const DIRECTORY_SEPARATOR;
-use const FILE_IGNORE_NEW_LINES;
-use const FILE_SKIP_EMPTY_LINES;
 use const FIXTURES;
 use const PHP_EOL;
 
@@ -1266,78 +1257,6 @@ EOF;
 
         $runnerResult = $this->runRunner();
         self::assertSame(RunnerInterface::SUCCESS_EXIT, $runnerResult->exitCode);
-    }
-
-    public function testRunWithCustomTestRunHistoryFactory(): void
-    {
-        putenv(TestRunHistoryFactory::ENV_KEY . '=' . FixtureTestRunHistoryFactory::class);
-        FixtureTestRunHistoryFactory::reset();
-
-        $this->bareOptions['--configuration']   = $this->fixture('order_by' . DIRECTORY_SEPARATOR . 'phpunit.xml');
-        $this->bareOptions['--cache-directory'] = $this->tmpDir;
-        $this->bareOptions['--processes']       = '1';
-        $this->bareOptions['--order-by']        = 'defects';
-
-        $this->runRunner();
-
-        self::assertTrue(FixtureTestRunHistoryFactory::$createCalled);
-        self::assertSame([$this->historyFile()], FixtureTestRunHistoryFactory::$createdFilepaths);
-    }
-
-    public function testRunWithCustomTestRunHistoryFactoryDoesNotRewriteHistoryFile(): void
-    {
-        putenv(TestRunHistoryFactory::ENV_KEY . '=' . FixtureTestRunHistoryFactory::class);
-        FixtureTestRunHistoryFactory::reset();
-
-        $this->bareOptions['--configuration']   = $this->fixture('order_by' . DIRECTORY_SEPARATOR . 'phpunit.xml');
-        $this->bareOptions['--cache-directory'] = $this->tmpDir;
-        $this->bareOptions['--processes']       = '1';
-        $this->bareOptions['--order-by']        = 'defects';
-
-        $historyFile = $this->historyFile();
-        file_put_contents($historyFile, FixtureTestRunHistory::SENTINEL);
-
-        $this->runRunner();
-
-        self::assertSame(
-            FixtureTestRunHistory::SENTINEL,
-            file_get_contents($historyFile),
-        );
-    }
-
-    public function testWorkerUsesCustomTestRunHistoryFactory(): void
-    {
-        putenv(TestRunHistoryFactory::ENV_KEY . '=' . FixtureLoggingTestRunHistoryFactory::class);
-
-        $this->bareOptions['--configuration']   = $this->fixture('order_by' . DIRECTORY_SEPARATOR . 'phpunit.xml');
-        $this->bareOptions['--cache-directory'] = $this->tmpDir;
-        $this->bareOptions['--processes']       = '1';
-        $this->bareOptions['--order-by']        = 'defects';
-
-        $this->runRunner();
-
-        $callsFile = $this->tmpDir . DIRECTORY_SEPARATOR . FixtureLoggingTestRunHistoryFactory::CALLS_FILE;
-        self::assertFileExists($callsFile);
-        $calls = file($callsFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-        self::assertIsArray($calls);
-
-        self::assertContains($this->historyFile(), $calls);
-
-        $workerCalls = preg_grep('~[\\\\/]worker_\d+_stdout_.+_result_cache$~', $calls);
-        self::assertNotEmpty($workerCalls, 'the worker process must build its test run history through the custom factory');
-    }
-
-    private function historyFile(): string
-    {
-        return $this->createOptionsFromArgv($this->bareOptions)->configuration->testRunHistoryFile();
-    }
-
-    protected function tearDown(): void
-    {
-        putenv(TestRunHistoryFactory::ENV_KEY);
-        FixtureTestRunHistoryFactory::reset();
-
-        parent::tearDown();
     }
 
     private static function sorted(string $from): string

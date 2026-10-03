@@ -7,7 +7,6 @@ namespace ParaTest;
 use Fidry\CpuCoreCounter\CpuCoreCounter;
 use Fidry\CpuCoreCounter\NumberOfCpuCoreNotFound;
 use InvalidArgumentException;
-use ParaTest\TestRunHistory\TestRunHistoryFactory;
 use ParaTest\WrapperRunner\ShardDistribution;
 use PHPUnit\TextUI\Configuration\Builder;
 use PHPUnit\TextUI\Configuration\Configuration;
@@ -28,7 +27,6 @@ use function count;
 use function dirname;
 use function escapeshellarg;
 use function file_exists;
-use function getenv;
 use function implode;
 use function is_array;
 use function is_bool;
@@ -941,18 +939,13 @@ final readonly class Options
         return $passthruAsArguments;
     }
 
-    /** @return array{PARATEST: int, TEST_TOKEN?: int, UNIQUE_TEST_TOKEN?: non-empty-string, PARATEST_TEST_RUN_HISTORY_FACTORY?: non-empty-string} */
+    /** @return array{PARATEST: int, TEST_TOKEN?: int, UNIQUE_TEST_TOKEN?: non-empty-string} */
     public function fillEnvWithTokens(int $inc): array
     {
         $env = ['PARATEST' => 1];
         if (! $this->noTestTokens) {
             $env[self::ENV_KEY_TOKEN]        = $inc;
             $env[self::ENV_KEY_UNIQUE_TOKEN] = uniqid($inc . '_');
-        }
-
-        $testRunHistoryFactory = getenv(TestRunHistoryFactory::ENV_KEY);
-        if (is_string($testRunHistoryFactory) && $testRunHistoryFactory !== '') {
-            $env[TestRunHistoryFactory::ENV_KEY] = $testRunHistoryFactory;
         }
 
         return $env;
