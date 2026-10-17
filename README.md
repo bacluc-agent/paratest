@@ -29,6 +29,10 @@ This is because of the following reasons:
 1. To reduce bugs, code duplication and incompatibilities with PHPUnit, from version 5 ParaTest heavily relies on PHPUnit `@internal` classes
 1. The fast pace both PHP and PHPUnit have taken recently adds too much maintenance burden, which we can only afford for the latest versions to stay up-to-date
 
+## PHPUnit compatibility
+
+Keep ParaTest and PHPUnit upgrades paired: ParaTest relies on PHPUnit `@internal` APIs, which can change without a compatibility guarantee. For example, PHPUnit 13.3 removed `NullResultCache`; ParaTest 7.24.0 adapted to PHPUnit's `TestRunHistory` API ([#1124](https://github.com/paratestphp/paratest/issues/1124)). Use the PHPUnit version allowed by the ParaTest release in `composer.json`.
+
 # Usage
 
 After installation, the binary can be found at `vendor/bin/paratest`. Run it
