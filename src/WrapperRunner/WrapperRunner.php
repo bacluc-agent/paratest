@@ -10,12 +10,16 @@ use ParaTest\Options;
 use ParaTest\RunnerInterface;
 use ParaTest\TestDox\TestDoxResultsMerger;
 use PHPUnit\Event\Facade as EventFacade;
+use PHPUnit\Event\TestRunner\DeprecationTriggered as TestRunnerDeprecationTriggered;
+use PHPUnit\Event\TestRunner\NoticeTriggered as TestRunnerNoticeTriggered;
+use PHPUnit\Event\TestRunner\WarningTriggered as TestRunnerWarningTriggered;
 use PHPUnit\Logging\TestDox\HtmlRenderer as TestDoxHtmlRenderer;
 use PHPUnit\Logging\TestDox\PlainTextRenderer as TestDoxPlainTextRenderer;
 use PHPUnit\Logging\TestDox\TestResultCollection as TestDoxTestResultCollection;
 use PHPUnit\Runner\CodeCoverage;
 use PHPUnit\Runner\TestRunHistory\DefaultTestRunHistory;
 use PHPUnit\TestRunner\TestResult\Facade as TestResultFacade;
+use PHPUnit\TestRunner\TestResult\Issues\Issue;
 use PHPUnit\TestRunner\TestResult\TestResult;
 use PHPUnit\TextUI\Configuration\CodeCoverageFilterRegistry;
 use PHPUnit\TextUI\Output\DefaultPrinter;
@@ -25,8 +29,7 @@ use ReflectionProperty;
 use RuntimeException;
 use SebastianBergmann\CodeCoverage\Node\Builder;
 use SebastianBergmann\CodeCoverage\Serialization\Merger;
-use SebastianBergmann\CodeCoverage\StaticAnalysis\FileAnalyser;
-use SebastianBergmann\CodeCoverage\StaticAnalysis\ParsingSourceAnalyser;
+use SebastianBergmann\CodeCoverage\StaticAnalysis\Registry as StaticAnalysisRegistry;
 use SplFileInfo;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Process\PhpExecutableFinder;
@@ -36,12 +39,14 @@ use function array_map;
 use function array_merge;
 use function array_merge_recursive;
 use function array_shift;
+use function array_values;
 use function assert;
 use function bin2hex;
 use function count;
 use function dirname;
 use function file_get_contents;
 use function filesize;
+use function implode;
 use function is_file;
 use function max;
 use function mkdir;
@@ -63,7 +68,7 @@ final class WrapperRunner implements RunnerInterface
     private const int CYCLE_SLEEP = 1000;
     private readonly ResultPrinter $printer;
 
-    /** @var list<non-empty-string> */
+    /** @var list<non-empty-list<non-empty-string>> */
     private array $pending = [];
     private int $exitcode  = -1;
     /** @var array<positive-int,WrapperWorker> */
@@ -195,7 +200,9 @@ final class WrapperRunner implements RunnerInterface
 
                 $this->flushWorker($worker);
 
-                if ($batchSize !== 0 && $this->batches[$token] === $batchSize) {
+                // A group of tests depending on each other is never split across worker restarts:
+                // the worker may exceed the batch size by the tests of the last group it was assigned
+                if ($batchSize !== 0 && $this->batches[$token] >= $batchSize) {
                     $this->destroyWorker($token);
                     $worker = $this->startWorker($token);
                 }
@@ -207,7 +214,7 @@ final class WrapperRunner implements RunnerInterface
                     $this->pending = [];
                 } elseif (($pending = array_shift($this->pending)) !== null) {
                     $worker->assign($pending);
-                    $this->batches[$token]++;
+                    $this->batches[$token] += count($pending);
                 }
             }
 
@@ -355,9 +362,9 @@ final class WrapperRunner implements RunnerInterface
                 array_merge_recursive($testResultSum->testTriggeredPhpunitErrorEvents(), $testResult->testTriggeredPhpunitErrorEvents()),
                 array_merge_recursive($testResultSum->testTriggeredPhpunitNoticeEvents(), $testResult->testTriggeredPhpunitNoticeEvents()),
                 array_merge_recursive($testResultSum->testTriggeredPhpunitWarningEvents(), $testResult->testTriggeredPhpunitWarningEvents()),
-                array_merge_recursive($testResultSum->testRunnerTriggeredDeprecationEvents(), $testResult->testRunnerTriggeredDeprecationEvents()),
-                array_merge_recursive($testResultSum->testRunnerTriggeredNoticeEvents(), $testResult->testRunnerTriggeredNoticeEvents()),
-                array_merge_recursive($testResultSum->testRunnerTriggeredWarningEvents(), $testResult->testRunnerTriggeredWarningEvents()),
+                self::mergeTestRunnerEvents($testResultSum->testRunnerTriggeredDeprecationEvents(), $testResult->testRunnerTriggeredDeprecationEvents()),
+                self::mergeTestRunnerEvents($testResultSum->testRunnerTriggeredNoticeEvents(), $testResult->testRunnerTriggeredNoticeEvents()),
+                self::mergeTestRunnerEvents($testResultSum->testRunnerTriggeredWarningEvents(), $testResult->testRunnerTriggeredWarningEvents()),
                 array_merge_recursive($testResultSum->testRunnerTriggeredIssueDeprecationEvents(), $testResult->testRunnerTriggeredIssueDeprecationEvents()),
                 array_merge_recursive($testResultSum->testRunnerTriggeredIssueErrorEvents(), $testResult->testRunnerTriggeredIssueErrorEvents()),
                 array_merge_recursive($testResultSum->testRunnerTriggeredIssueNoticeEvents(), $testResult->testRunnerTriggeredIssueNoticeEvents()),
@@ -365,13 +372,13 @@ final class WrapperRunner implements RunnerInterface
                 array_merge_recursive($testResultSum->testRunnerTriggeredIssuePhpNoticeEvents(), $testResult->testRunnerTriggeredIssuePhpNoticeEvents()),
                 array_merge_recursive($testResultSum->testRunnerTriggeredIssuePhpWarningEvents(), $testResult->testRunnerTriggeredIssuePhpWarningEvents()),
                 array_merge_recursive($testResultSum->testRunnerTriggeredIssueWarningEvents(), $testResult->testRunnerTriggeredIssueWarningEvents()),
-                array_merge_recursive($testResultSum->errors(), $testResult->errors()),
-                array_merge_recursive($testResultSum->deprecations(), $testResult->deprecations()),
-                array_merge_recursive($testResultSum->notices(), $testResult->notices()),
-                array_merge_recursive($testResultSum->warnings(), $testResult->warnings()),
-                array_merge_recursive($testResultSum->phpDeprecations(), $testResult->phpDeprecations()),
-                array_merge_recursive($testResultSum->phpNotices(), $testResult->phpNotices()),
-                array_merge_recursive($testResultSum->phpWarnings(), $testResult->phpWarnings()),
+                self::mergeIssues($testResultSum->errors(), $testResult->errors()),
+                self::mergeIssues($testResultSum->deprecations(), $testResult->deprecations()),
+                self::mergeIssues($testResultSum->notices(), $testResult->notices()),
+                self::mergeIssues($testResultSum->warnings(), $testResult->warnings()),
+                self::mergeIssues($testResultSum->phpDeprecations(), $testResult->phpDeprecations()),
+                self::mergeIssues($testResultSum->phpNotices(), $testResult->phpNotices()),
+                self::mergeIssues($testResultSum->phpWarnings(), $testResult->phpWarnings()),
                 $testResultSum->numberOfIssuesIgnoredByBaseline() + $testResult->numberOfIssuesIgnoredByBaseline(),
                 [
                     'self' => $testResultSum->numberOfSelfDeprecations() + $testResult->numberOfSelfDeprecations(),
@@ -425,6 +432,65 @@ final class WrapperRunner implements RunnerInterface
         return $exitcode;
     }
 
+    /**
+     * The main process and every worker trigger the same test runner issues, as the ones about the configuration:
+     * an issue already triggered by another process is not repeated
+     *
+     * @param list<T> $events
+     * @param list<T> $newEvents
+     *
+     * @return list<T>
+     *
+     * @template T of TestRunnerDeprecationTriggered|TestRunnerNoticeTriggered|TestRunnerWarningTriggered
+     */
+    private static function mergeTestRunnerEvents(array $events, array $newEvents): array
+    {
+        $messages = [];
+        foreach ($events as $event) {
+            $messages[$event->message()] = true;
+        }
+
+        foreach ($newEvents as $newEvent) {
+            if (isset($messages[$newEvent->message()])) {
+                continue;
+            }
+
+            $events[] = $newEvent;
+        }
+
+        return $events;
+    }
+
+    /**
+     * PHPUnit reports an issue once, with all the tests that triggered it:
+     * the same issue triggered in different workers must be merged the same way
+     *
+     * @param list<Issue> $issues
+     * @param list<Issue> $newIssues
+     *
+     * @return list<Issue>
+     */
+    private static function mergeIssues(array $issues, array $newIssues): array
+    {
+        $mergedIssues = [];
+        foreach ([...$issues, ...$newIssues] as $issue) {
+            $id = implode(':', [$issue->file(), $issue->line(), $issue->description()]);
+            if (! isset($mergedIssues[$id])) {
+                $mergedIssues[$id] = clone $issue;
+
+                continue;
+            }
+
+            foreach ($issue->triggeringTests() as $triggeringTest) {
+                for ($count = 0; $count < $triggeringTest['count']; ++$count) {
+                    $mergedIssues[$id]->triggeredBy($triggeringTest['test']);
+                }
+            }
+        }
+
+        return array_values($mergedIssues);
+    }
+
     protected function generateCodeCoverageReports(): void
     {
         if ($this->coverageFiles === []) {
@@ -459,12 +525,17 @@ final class WrapperRunner implements RunnerInterface
         });
         $serializedCoverage = (new Merger())->merge($coverageFiles);
 
-        $report       = (new Builder(new FileAnalyser(new ParsingSourceAnalyser(), false, false)))->build(
+        $codeCoverage = $coverageManager->codeCoverage();
+        $analyser     = StaticAnalysisRegistry::analyser(
+            $codeCoverage->cachesStaticAnalysis() ? $codeCoverage->cacheDirectory() : null,
+            ! $this->options->configuration->disableCodeCoverageIgnore(),
+            $this->options->configuration->ignoreDeprecatedCodeUnitsFromCodeCoverage(),
+        );
+        $report       = (new Builder($analyser))->build(
             $serializedCoverage['codeCoverage'],
             $serializedCoverage['testResults'],
             $serializedCoverage['basePath'],
         );
-        $codeCoverage = $coverageManager->codeCoverage();
         $codeCoverage->excludeUncoveredFiles();
         $codeCoverageData = clone $serializedCoverage['codeCoverage'];
         if ($serializedCoverage['basePath'] !== '') {
