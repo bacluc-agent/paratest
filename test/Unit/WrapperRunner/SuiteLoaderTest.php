@@ -4,18 +4,36 @@ declare(strict_types=1);
 
 namespace ParaTest\Tests\Unit\WrapperRunner;
 
+use ParaTest\Tests\fixtures\multi_method_tests\AlphaTest;
+use ParaTest\Tests\fixtures\multi_method_tests\BravoTest;
+use ParaTest\Tests\fixtures\multi_method_tests\CharlieTest;
+use ParaTest\Tests\fixtures\multi_method_tests\DeltaTest;
+use ParaTest\Tests\fixtures\multi_method_tests\EchoTest;
+use ParaTest\Tests\fixtures\multi_method_tests\FoxtrotTest;
+use ParaTest\Tests\fixtures\multi_method_tests\GolfTest;
 use ParaTest\Tests\TestBase;
 use ParaTest\WrapperRunner\ShardDistribution;
 use ParaTest\WrapperRunner\SuiteLoader;
 use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\TestCase;
+use PHPUnit\Runner\TestRunHistory\DefaultTestRunHistory;
+use PHPUnit\Runner\TestRunHistory\TestRunHistoryId;
 use PHPUnit\TextUI\Configuration\CodeCoverageFilterRegistry;
 use Symfony\Component\Console\Output\BufferedOutput;
 
 use function array_map;
+use function array_merge;
 use function array_shift;
+use function array_unique;
+use function array_values;
 use function basename;
+use function count;
+use function explode;
+use function file_put_contents;
+use function is_subclass_of;
 use function preg_match;
+use function sort;
 use function uniqid;
 
 use const DIRECTORY_SEPARATOR;
@@ -45,7 +63,7 @@ final class SuiteLoaderTest extends TestBase
     {
         $path                      = $this->fixture('common_results' . DIRECTORY_SEPARATOR . 'SuccessTest.php');
         $this->bareOptions['path'] = $path;
-        $files                     = $this->loadSuite()->tests;
+        $files                     = array_merge(...$this->loadSuite()->tests);
 
         $file = array_shift($files);
         self::assertNotNull($file);
@@ -66,11 +84,39 @@ final class SuiteLoaderTest extends TestBase
     public function testLoadsPhptFiles(): void
     {
         $this->bareOptions['path'] = $this->fixture('phpt');
-        $files                     = $this->loadSuite()->tests;
+        $files                     = array_merge(...$this->loadSuite()->tests);
 
         $file = array_shift($files);
         self::assertNotNull($file);
         self::assertStringContainsString('my_test.phpt', $file);
+    }
+
+    public function testFunctionalTestsHaveNoLineBreaks(): void
+    {
+        $this->bareOptions['path']         = $this->fixture('line_feed_in_data_set_name');
+        $this->bareOptions['--functional'] = true;
+
+        $tests = array_merge(...$this->loadSuite()->tests);
+
+        $testNames = [
+            'testDataSetName with data set "line"',
+            "testDataSetName with data set \"line\nfeed\"",
+            "testDataSetName with data set \"carriage\r\nreturn\"",
+        ];
+        self::assertCount(count($testNames), $tests);
+        foreach ($tests as $index => $test) {
+            self::assertStringNotContainsString("\n", $test);
+            self::assertStringNotContainsString("\r", $test);
+
+            // The filter still selects the very test it was built for
+            $filter = explode("\0", $test)[1];
+            foreach ($testNames as $nameIndex => $testName) {
+                self::assertSame(
+                    $index === $nameIndex ? 1 : 0,
+                    preg_match($filter, 'LineFeedInDataSetNameTest::' . $testName),
+                );
+            }
+        }
     }
 
     /** @return iterable<string, array{string, string, list<array{list<string>, int}>}> */
@@ -154,7 +200,7 @@ final class SuiteLoaderTest extends TestBase
         foreach ($expectedPerShard as $index => [$expectedFiles, $expectedTestCount]) {
             $this->bareOptions['--shard'] = ($index + 1) . '/' . $totalShards;
             $loader                       = $this->loadSuite();
-            self::assertSame($expectedFiles, array_map(basename(...), $loader->tests));
+            self::assertSame($expectedFiles, array_map(basename(...), array_merge(...$loader->tests)));
             self::assertSame($expectedTestCount, $loader->testCount);
         }
     }
@@ -210,7 +256,7 @@ final class SuiteLoaderTest extends TestBase
         foreach ($expectedPerShard as $index => [$expectedFiles, $expectedTestCount]) {
             $this->bareOptions['--shard'] = ($index + 1) . '/' . $totalShards;
             $loader                       = $this->loadSuite();
-            self::assertSame($expectedFiles, array_map(basename(...), $loader->tests));
+            self::assertSame($expectedFiles, array_map(basename(...), array_merge(...$loader->tests)));
             self::assertSame($expectedTestCount, $loader->testCount);
         }
     }
@@ -238,6 +284,168 @@ final class SuiteLoaderTest extends TestBase
         $secondRun = $this->loadSuiteFileNames();
 
         self::assertSame($firstRun, $secondRun);
+    }
+
+    /**
+     * Durations in seconds, as binary fractions so that sums tie exactly: per file, Alpha=0.375, Bravo=6,
+     * Charlie=2, Delta=1, Echo=3, Foxtrot=0.75, Golf=2
+     *
+     * @return array<non-empty-string, float>
+     */
+    private static function multiMethodTestsDurations(): array
+    {
+        return [
+            AlphaTest::class . '::testOne' => 0.125,
+            AlphaTest::class . '::testTwo' => 0.125,
+            AlphaTest::class . '::testThree' => 0.125,
+            BravoTest::class . '::testFour' => 5.0,
+            BravoTest::class . '::testFive' => 1.0,
+            CharlieTest::class . '::testSix' => 2.0,
+            DeltaTest::class . '::testSeven' => 0.5,
+            DeltaTest::class . '::testEight' => 0.5,
+            EchoTest::class . '::testNine' => 3.0,
+            FoxtrotTest::class . '::testTen' => 0.25,
+            FoxtrotTest::class . '::testEleven' => 0.25,
+            FoxtrotTest::class . '::testTwelve' => 0.25,
+            GolfTest::class . '::testThirteen' => 1.0,
+            GolfTest::class . '::testFourteen' => 1.0,
+        ];
+    }
+
+    /** @return iterable<string, array{array<non-empty-string, float>, string, list<array{list<string>, int}>}> */
+    public static function durationShardDistributionProvider(): iterable
+    {
+        yield 'full history, 2 shards' => [
+            self::multiMethodTestsDurations(),
+            '2',
+            [
+                [['BravoTest.php', 'DeltaTest.php', 'FoxtrotTest.php'], 7],
+                [['AlphaTest.php', 'CharlieTest.php', 'EchoTest.php', 'GolfTest.php'], 7],
+            ],
+        ];
+
+        yield 'full history, 3 shards' => [
+            self::multiMethodTestsDurations(),
+            '3',
+            [
+                [['BravoTest.php'], 2],
+                [['DeltaTest.php', 'EchoTest.php', 'FoxtrotTest.php'], 6],
+                [['AlphaTest.php', 'CharlieTest.php', 'GolfTest.php'], 6],
+            ],
+        ];
+
+        yield 'full history, more shards than files' => [
+            self::multiMethodTestsDurations(),
+            '8',
+            [
+                [['BravoTest.php'], 2],
+                [['EchoTest.php'], 1],
+                [['CharlieTest.php'], 1],
+                [['GolfTest.php'], 2],
+                [['DeltaTest.php'], 2],
+                [['FoxtrotTest.php'], 3],
+                [['AlphaTest.php'], 3],
+                [[], 0],
+            ],
+        ];
+
+        // Without history every test weighs the same: shards are balanced by test count
+        yield 'no history, 2 shards' => [
+            [],
+            '2',
+            [
+                [['AlphaTest.php', 'BravoTest.php', 'GolfTest.php'], 7],
+                [['CharlieTest.php', 'DeltaTest.php', 'EchoTest.php', 'FoxtrotTest.php'], 7],
+            ],
+        ];
+
+        // Tests missing from the history weigh the mean known duration, 3 seconds here:
+        // Alpha=9, Bravo=5+3, Charlie=3, Delta=6, Echo=1, Foxtrot=9, Golf=6
+        yield 'partial history, 2 shards' => [
+            [
+                BravoTest::class . '::testFour' => 5.0,
+                EchoTest::class . '::testNine' => 1.0,
+            ],
+            '2',
+            [
+                [['AlphaTest.php', 'BravoTest.php', 'CharlieTest.php', 'EchoTest.php'], 7],
+                [['DeltaTest.php', 'FoxtrotTest.php', 'GolfTest.php'], 7],
+            ],
+        ];
+    }
+
+    /**
+     * @param array<non-empty-string, float> $durations
+     * @param non-empty-string               $totalShards
+     * @param list<array{list<string>, int}> $expectedPerShard
+     */
+    #[DataProvider('durationShardDistributionProvider')]
+    public function testDurationShardDistribution(array $durations, string $totalShards, array $expectedPerShard): void
+    {
+        $this->writeTestRunHistory($durations);
+        $this->bareOptions['--configuration']           = $this->fixture('phpunit-multi_method_tests.xml');
+        $this->bareOptions['--cache-directory']         = $this->tmpDir;
+        $this->bareOptions['--shard-test-distribution'] = ShardDistribution::Duration->value;
+
+        foreach ($expectedPerShard as $index => [$expectedFiles, $expectedTestCount]) {
+            $this->bareOptions['--shard'] = ($index + 1) . '/' . $totalShards;
+            $loader                       = $this->loadSuite();
+            self::assertSame($expectedFiles, array_map(basename(...), array_merge(...$loader->tests)));
+            self::assertSame($expectedTestCount, $loader->testCount);
+        }
+    }
+
+    public function testFunctionalDurationShardDistribution(): void
+    {
+        $this->writeTestRunHistory(self::multiMethodTestsDurations());
+        $this->bareOptions['--configuration']           = $this->fixture('phpunit-multi_method_tests.xml');
+        $this->bareOptions['--cache-directory']         = $this->tmpDir;
+        $this->bareOptions['--shard-test-distribution'] = ShardDistribution::Duration->value;
+        $this->bareOptions['--functional']              = true;
+
+        // 7.625 and 7.5 seconds
+        $this->bareOptions['--shard'] = '1/2';
+        self::assertSame(['testThree', 'testFour', 'testFive', 'testTen', 'testTwelve', 'testFourteen'], $this->loadSuiteMethodNames());
+        $this->bareOptions['--shard'] = '2/2';
+        self::assertSame(['testOne', 'testTwo', 'testSix', 'testSeven', 'testEight', 'testNine', 'testEleven', 'testThirteen'], $this->loadSuiteMethodNames());
+    }
+
+    public function testDurationShardDistributionIgnoresHistoryWhenNotRecordingIt(): void
+    {
+        $this->writeTestRunHistory(self::multiMethodTestsDurations());
+
+        $configurationFile = $this->tmpDir . DIRECTORY_SEPARATOR . 'phpunit.xml';
+        file_put_contents($configurationFile, <<<XML
+            <?xml version="1.0" encoding="UTF-8"?>
+            <phpunit recordTestRunHistory="false">
+                <testsuites>
+                    <testsuite name="Multi method">
+                        <directory>{$this->fixture('multi_method_tests')}</directory>
+                    </testsuite>
+                </testsuites>
+            </phpunit>
+            XML);
+
+        $this->bareOptions['--configuration']           = $configurationFile;
+        $this->bareOptions['--cache-directory']         = $this->tmpDir;
+        $this->bareOptions['--shard-test-distribution'] = ShardDistribution::Duration->value;
+        $this->bareOptions['--shard']                   = '1/2';
+
+        // Balanced by test count, as without history
+        self::assertSame(['AlphaTest.php', 'BravoTest.php', 'GolfTest.php'], $this->loadSuiteFileNames());
+    }
+
+    /** @param array<non-empty-string, float> $durations */
+    private function writeTestRunHistory(array $durations): void
+    {
+        $history = new DefaultTestRunHistory($this->tmpDir . DIRECTORY_SEPARATOR . 'test-run-history');
+        foreach ($durations as $test => $duration) {
+            [$class, $method] = explode('::', $test);
+            self::assertTrue(is_subclass_of($class, TestCase::class));
+            $history->setTime(TestRunHistoryId::fromTestClassAndMethodName($class, $method), $duration);
+        }
+
+        $history->persist();
     }
 
     /** @return iterable<string, array{string, string, list<list<string>>}> */
@@ -342,21 +550,240 @@ final class SuiteLoaderTest extends TestBase
         }
     }
 
+    public function testGroupsFilesDependingOnEachOtherInDependencyOrder(): void
+    {
+        $this->bareOptions['--configuration'] = $this->fixture('depends_across_items' . DIRECTORY_SEPARATOR . 'phpunit.xml');
+
+        self::assertSame([
+            ['BProducerTest', 'AConsumerTest'],
+            ['DClassProducerTest', 'CClassConsumerTest'],
+            ['GChainFirstTest', 'FChainSecondTest', 'EChainThirdTest'],
+            ['IDataProviderProducerTest', 'HDataProviderConsumerTest'],
+            ['JIndependentTest'],
+            ['KProducerTest', 'LConsumerTest'],
+        ], $this->loadSuiteGroups());
+    }
+
+    public function testGroupsTestsDependingOnEachOtherInDependencyOrder(): void
+    {
+        $this->bareOptions['--configuration'] = $this->fixture('depends_across_items' . DIRECTORY_SEPARATOR . 'phpunit.xml');
+        $this->bareOptions['--functional']    = true;
+
+        self::assertSame([
+            ['BProducerTest::testProduce', 'AConsumerTest::testConsume'],
+            ['DClassProducerTest::testOne', 'DClassProducerTest::testTwo', 'CClassConsumerTest::testConsume'],
+            ['GChainFirstTest::testFirst', 'FChainSecondTest::testSecond', 'EChainThirdTest::testThird'],
+            ['IDataProviderProducerTest::testProduce with data set "first"', 'IDataProviderProducerTest::testProduce with data set "second"', 'HDataProviderConsumerTest::testConsume'],
+            ['JIndependentTest::testOne'],
+            ['JIndependentTest::testTwo'],
+            ['KProducerTest::testProduce', 'LConsumerTest::testConsume'],
+        ], $this->loadSuiteGroups());
+    }
+
+    public function testDependencyExcludedByFilterIsNotGrouped(): void
+    {
+        $this->bareOptions['--configuration'] = $this->fixture('depends_across_items' . DIRECTORY_SEPARATOR . 'phpunit.xml');
+        $this->bareOptions['--filter']        = 'AConsumerTest';
+
+        self::assertSame([['AConsumerTest']], $this->loadSuiteGroups());
+    }
+
+    /**
+     * @param non-empty-string $distribution
+     * @param non-empty-string $totalShards
+     */
+    #[DataProvider('provideShardsOfGroups')]
+    public function testShardsKeepGroupsTogether(string $distribution, string $totalShards, bool $functional): void
+    {
+        $this->bareOptions['--configuration']           = $this->fixture('depends_across_items' . DIRECTORY_SEPARATOR . 'phpunit.xml');
+        $this->bareOptions['--shard-test-distribution'] = $distribution;
+        if ($functional) {
+            $this->bareOptions['--functional'] = true;
+        }
+
+        $expectedGroups = $this->loadSuiteGroups();
+
+        $shardedGroups = [];
+        for ($shard = 1; $shard <= (int) $totalShards; ++$shard) {
+            $this->bareOptions['--shard'] = $shard . '/' . $totalShards;
+            $groups                       = $this->loadSuiteGroups();
+            self::assertNotSame([], $groups);
+
+            $shardedGroups = array_merge($shardedGroups, $groups);
+        }
+
+        // Sharding with --functional flattens the suite: within a group, the order of the data sets
+        // of a test can then differ, see the ResolveDependencies stage of PHPUnit
+        self::assertSame(self::canonicalize($expectedGroups), self::canonicalize($shardedGroups));
+    }
+
+    /**
+     * @param list<list<string>> $groups
+     *
+     * @return list<list<string>>
+     */
+    private static function canonicalize(array $groups): array
+    {
+        foreach ($groups as $index => $group) {
+            sort($group);
+            $groups[$index] = $group;
+        }
+
+        sort($groups);
+
+        return $groups;
+    }
+
+    /** @return iterable<string, array{non-empty-string, non-empty-string, bool}> */
+    public static function provideShardsOfGroups(): iterable
+    {
+        foreach (ShardDistribution::cases() as $distribution) {
+            foreach (['2', '3'] as $totalShards) {
+                yield "{$distribution->value}, $totalShards shards" => [$distribution->value, $totalShards, false];
+                yield "functional, {$distribution->value}, $totalShards shards" => [$distribution->value, $totalShards, true];
+            }
+        }
+    }
+
+    public function testFunctionalQueuesEachRepeatedOrRetriedTestOnce(): void
+    {
+        $this->bareOptions['path']         = $this->fixture('repeat_retry');
+        $this->bareOptions['--functional'] = true;
+
+        $loader = $this->loadSuite();
+        $tests  = array_merge(...$loader->tests);
+
+        self::assertSame(11, $loader->testCount);
+        self::assertCount(6, $tests);
+        self::assertSame(array_values(array_unique($tests)), $tests);
+    }
+
+    /**
+     * Groups as test file names, or as test names with --functional
+     *
+     * @return list<list<string>>
+     */
+    private function loadSuiteGroups(): array
+    {
+        return array_map(static fn (array $group): array => array_map(static function (string $workItem): string {
+            $parts = explode("\0", $workItem);
+            $name  = basename($parts[0], '.php');
+            if (isset($parts[1])) {
+                self::assertSame(1, preg_match('/^\/::(.+)\$\/$/', $parts[1], $matches));
+                $name .= '::' . $matches[1];
+            }
+
+            return $name;
+        }, $group), $this->loadSuite()->tests);
+    }
+
+    public function testFunctionalAppliesFilterToRepeatedOrRetriedTests(): void
+    {
+        $this->bareOptions['path']         = $this->fixture('repeat_retry');
+        $this->bareOptions['--functional'] = true;
+        $this->bareOptions['--filter']     = 'testPlain';
+
+        $loader = $this->loadSuite();
+
+        self::assertSame(1, $loader->testCount);
+        self::assertCount(1, $loader->tests);
+    }
+
+    public function testShardingKeepsClassesWithRepeatedOrRetriedTestsTogether(): void
+    {
+        $this->bareOptions['path'] = $this->fixture('repeat_retry');
+
+        $files     = [];
+        $testCount = 0;
+        foreach (['1/2', '2/2'] as $shard) {
+            $this->bareOptions['--shard'] = $shard;
+            $loader                       = $this->loadSuite();
+            $files                        = array_merge($files, array_map(basename(...), array_merge(...$loader->tests)));
+            $testCount                   += $loader->testCount;
+        }
+
+        sort($files);
+        self::assertSame(['RepeatRetryAttributesTest.php', 'RepeatedCompanionTest.php'], $files);
+        self::assertSame(11, $testCount);
+    }
+
+    public function testFunctionalShardingKeepsRepetitionsAndAttemptsTogether(): void
+    {
+        $this->bareOptions['path']         = $this->fixture('repeat_retry');
+        $this->bareOptions['--functional'] = true;
+
+        $tests     = [];
+        $testCount = 0;
+        foreach (['1/2', '2/2'] as $shard) {
+            $this->bareOptions['--shard'] = $shard;
+            $loader                       = $this->loadSuite();
+            $tests                        = array_merge($tests, ...$loader->tests);
+            $testCount                   += $loader->testCount;
+        }
+
+        self::assertCount(6, $tests);
+        self::assertSame(array_values(array_unique($tests)), $tests);
+        self::assertSame(11, $testCount);
+    }
+
+    /** @return iterable<string, array{non-empty-string, non-empty-string, ?non-empty-string}> */
+    public static function provideShardsWithPhptFiles(): iterable
+    {
+        foreach (['phpt' => 'my_test.phpt', 'function_parallelization_tests' => 'Regression.phpt'] as $path => $phptFile) {
+            yield $path => [$path, $phptFile, null];
+            yield "$path, repeat" => [$path, $phptFile, '--repeat'];
+            yield "$path, retry" => [$path, $phptFile, '--retry'];
+        }
+    }
+
+    /**
+     * @param non-empty-string  $path
+     * @param non-empty-string  $phptFile
+     * @param ?non-empty-string $option
+     */
+    #[DataProvider('provideShardsWithPhptFiles')]
+    public function testShardingKeepsPhptFiles(string $path, string $phptFile, ?string $option): void
+    {
+        $this->bareOptions['path'] = $this->fixture($path);
+        if ($option !== null) {
+            $this->bareOptions[$option] = '2';
+        }
+
+        $loader            = $this->loadSuite();
+        $expectedFiles     = array_map(basename(...), array_merge(...$loader->tests));
+        $expectedTestCount = $loader->testCount;
+
+        $files     = [];
+        $testCount = 0;
+        foreach (['1/2', '2/2'] as $shard) {
+            $this->bareOptions['--shard'] = $shard;
+            $loader                       = $this->loadSuite();
+            $files                        = array_merge($files, array_map(basename(...), array_merge(...$loader->tests)));
+            $testCount                   += $loader->testCount;
+        }
+
+        sort($expectedFiles);
+        sort($files);
+        self::assertContains($phptFile, $expectedFiles);
+        self::assertSame($expectedFiles, $files);
+        self::assertSame($expectedTestCount, $testCount);
+    }
+
     /** @return list<string> */
     private function loadSuiteFileNames(): array
     {
-        return array_map(basename(...), $this->loadSuite()->tests);
+        return array_map(basename(...), array_merge(...$this->loadSuite()->tests));
     }
 
     /** @return list<string> */
     private function loadSuiteMethodNames(): array
     {
         return array_map(static function (string $test): string {
-            $result = preg_match('/\/(\w+)\$/', $test, $matches);
+            $result = preg_match('/::(\w+)\$/', $test, $matches);
             self::assertSame(1, $result);
 
             return $matches[1];
-        }, $this->loadSuite()->tests);
+        }, array_merge(...$this->loadSuite()->tests));
     }
 
     private function loadSuite(): SuiteLoader

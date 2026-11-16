@@ -7,7 +7,8 @@ namespace ParaTest\WrapperRunner;
 use Generator;
 use ParaTest\Options;
 use PHPUnit\Event\Facade as EventFacade;
-use PHPUnit\Framework\DataProviderTestSuite;
+use PHPUnit\Framework\IterativeTestSuite;
+use PHPUnit\Framework\Reorderable;
 use PHPUnit\Framework\Test;
 use PHPUnit\Framework\TestCase;
 use PHPUnit\Framework\TestSuite;
@@ -18,6 +19,8 @@ use PHPUnit\Runner\Extension\PharLoader;
 use PHPUnit\Runner\Phpt\TestCase as PhptTestCase;
 use PHPUnit\Runner\TestRunHistory\DefaultTestRunHistory;
 use PHPUnit\Runner\TestRunHistory\NullTestRunHistory;
+use PHPUnit\Runner\TestRunHistory\TestRunHistory;
+use PHPUnit\Runner\TestRunHistory\TestRunHistoryId;
 use PHPUnit\Runner\TestSuiteSorter;
 use PHPUnit\TestRunner\TestResult\Facade as TestResultFacade;
 use PHPUnit\TextUI\Command\Result;
@@ -32,24 +35,33 @@ use ReflectionClass;
 use ReflectionProperty;
 use Symfony\Component\Console\Output\OutputInterface;
 
+use function array_fill;
 use function array_filter;
 use function array_keys;
+use function array_map;
 use function array_merge;
+use function array_search;
 use function array_slice;
+use function array_sum;
 use function array_values;
 use function assert;
 use function ceil;
 use function count;
 use function is_int;
 use function is_string;
+use function ksort;
+use function min;
 use function mt_srand;
 use function ob_get_clean;
 use function ob_start;
 use function preg_quote;
+use function spl_object_id;
 use function sprintf;
+use function str_replace;
 use function str_starts_with;
 use function strlen;
 use function substr;
+use function usort;
 
 use const ARRAY_FILTER_USE_KEY;
 
@@ -57,7 +69,7 @@ use const ARRAY_FILTER_USE_KEY;
 final readonly class SuiteLoader
 {
     public int $testCount;
-    /** @var list<non-empty-string> */
+    /** @var list<non-empty-list<non-empty-string>> Work items, grouped by the worker that must run them together */
     public array $tests;
 
     public function __construct(
@@ -101,8 +113,10 @@ final readonly class SuiteLoader
 
         $testSuite = (new TestSuiteBuilder($emitter))->build($this->options->configuration);
 
+        $groups = DependencyGrouper::group($this->workItems($testSuite));
+
         if ($this->options->hasShard()) {
-            $this->shardTests($testSuite);
+            $this->shardTests($testSuite, $groups);
         }
 
         if ($this->options->configuration->executionOrder() === TestSuiteSorter::ORDER_RANDOMIZED) {
@@ -114,19 +128,13 @@ final readonly class SuiteLoader
             $this->options->configuration->executionOrderDefects() !== TestSuiteSorter::ORDER_DEFAULT ||
             $this->options->configuration->resolveDependencies()
         ) {
-            $resultCache = new NullTestRunHistory();
-            if ($this->options->configuration->recordTestRunHistory()) {
-                $resultCache = new DefaultTestRunHistory($this->options->configuration->testRunHistoryFile());
-                $resultCache->load();
-            }
-
             $pipeline = ReorderPipeline::fromConfiguration(
                 $this->options->configuration->executionOrder(),
                 $this->options->configuration->executionOrderDefects(),
                 $this->options->configuration->resolveDependencies(),
             );
             if (! $pipeline->isEmpty()) {
-                (new TestSuiteSorter($resultCache))->apply($testSuite, $pipeline);
+                (new TestSuiteSorter($this->testRunHistory()))->apply($testSuite, $pipeline);
             }
         }
 
@@ -134,37 +142,12 @@ final readonly class SuiteLoader
 
         $this->testCount = count($testSuite);
 
-        $files = [];
         $tests = [];
-        foreach ($this->loadFiles($testSuite) as $file => $test) {
-            $files[$file] = null;
-
-            if ($test instanceof PhptTestCase) {
-                $tests[] = $file;
-            } else {
-                $name = $test->name();
-                if ($test->providedData() !== []) {
-                    $dataName = $test->dataName();
-                    if ($this->options->functional) {
-                        $name = sprintf('/%s%s$/', preg_quote($name, '/'), preg_quote($test->dataSetAsString(), '/'));
-                    } else {
-                        if (is_int($dataName)) {
-                            $name .= '#' . $dataName;
-                        } else {
-                            $name .= '@' . $dataName;
-                        }
-                    }
-                } else {
-                    $name = sprintf('/%s$/', $name);
-                }
-
-                $tests[] = "$file\0$name";
-            }
+        foreach ($this->workItems($testSuite) as $workItem => $test) {
+            $tests[$groups[$workItem]][$workItem] = $workItem;
         }
 
-        $this->tests = $this->options->functional
-            ? $tests
-            : array_keys($files);
+        $this->tests = array_values(array_map(array_values(...), $tests));
 
         if (! $this->options->configuration->hasCoverageReport()) {
             return;
@@ -184,38 +167,66 @@ final readonly class SuiteLoader
         }
     }
 
-    /** @return Generator<non-empty-string, (PhptTestCase|TestCase)> */
-    private function loadFiles(TestSuite $testSuite): Generator
+    /**
+     * A work item is what a worker gets to run: a file, or a single test with --functional
+     *
+     * @return Generator<non-empty-string, (PhptTestCase|TestCase)>
+     */
+    private function workItems(Test $test): Generator
     {
-        foreach ($testSuite as $test) {
-            if ($test instanceof TestSuite) {
-                yield from $this->loadFiles($test);
-
-                continue;
+        if ($test instanceof IterativeTestSuite) {
+            // The repetitions or attempts of a test run as one unit: queue it once,
+            // unless the suite's filter excludes it
+            $iterator = $test->getIterator();
+            $iterator->rewind();
+            if (! $iterator->valid()) {
+                return;
             }
 
-            if ($test instanceof PhptTestCase) {
-                $refProperty = new ReflectionProperty(PhptTestCase::class, 'filename');
-                $filename    = $refProperty->getValue($test);
-                assert(is_string($filename) && $filename !== '');
-                $filename = $this->stripCwd($filename);
-
-                yield $filename => $test;
-
-                continue;
+            $test = $iterator->current();
+        } elseif ($test instanceof TestSuite) {
+            foreach ($test as $childTest) {
+                yield from $this->workItems($childTest);
             }
 
-            if ($test instanceof TestCase) {
-                $refClass = new ReflectionClass($test);
-                $filename = $refClass->getFileName();
-                assert(is_string($filename));
-                $filename = $this->stripCwd($filename);
-
-                yield $filename => $test;
-
-                continue;
-            }
+            return;
         }
+
+        if ($test instanceof PhptTestCase) {
+            $refProperty = new ReflectionProperty(PhptTestCase::class, 'filename');
+            $filename    = $refProperty->getValue($test);
+            assert(is_string($filename) && $filename !== '');
+
+            yield $this->stripCwd($filename) => $test;
+
+            return;
+        }
+
+        if (! $test instanceof TestCase) {
+            return;
+        }
+
+        $refClass = new ReflectionClass($test);
+        $filename = $refClass->getFileName();
+        assert(is_string($filename));
+        $filename = $this->stripCwd($filename);
+
+        if (! $this->options->functional) {
+            yield $filename => $test;
+
+            return;
+        }
+
+        // Workers read one work item per line: line breaks in the data set name are written as regex escapes
+        $name = $test->providedData() !== []
+            ? sprintf(
+                '/::%s%s$/',
+                preg_quote($test->name(), '/'),
+                str_replace(["\r", "\n"], ['\r', '\n'], preg_quote($test->dataSetAsString(), '/')),
+            )
+            : sprintf('/::%s$/', $test->name());
+
+        yield "$filename\0$name" => $test;
     }
 
     /**
@@ -235,63 +246,167 @@ final readonly class SuiteLoader
         return $substr;
     }
 
-    private function shardTests(TestSuite $suite): void
+    /**
+     * Shards over groups of items, so that tests depending on each other end up in the same shard
+     *
+     * @param array<non-empty-string, non-empty-string> $groups
+     */
+    private function shardTests(TestSuite $suite, array $groups): void
     {
         $shards  = $this->options->totalShards;
         $current = $this->options->currentShard - 1; // 0 indexed. Shard 1 is in reality shard 0
 
-        // With --functional, shard over individual test methods (values).
-        // Without --functional, shard over class-level suites (keys) to keep whole files together.
+        // With --functional, shard over individual tests, otherwise over whole files
         $items = $this->options->functional
             ? $this->extractTestsInSuite($suite)
-            : $this->extractClassSuites($suite);
+            : $this->extractFiles($suite);
 
-        $shardedItems = match ($this->options->shardDistribution) {
-            ShardDistribution::Sequential => array_slice($items, (int) ceil(count($items) / $shards) * $current, (int) ceil(count($items) / $shards)),
-            ShardDistribution::RoundRobin => array_values(array_filter($items, static fn (int $i): bool => $i % $shards === $current, ARRAY_FILTER_USE_KEY)),
-            ShardDistribution::Random => $this->randomShardTests($items, $shards, $current),
-        };
-
-        $suite->setTests($shardedItems);
-    }
-
-    /**
-     * @param list<Test> $tests
-     *
-     * @return list<Test>
-     */
-    private function randomShardTests(array $tests, int $shards, int $current): array
-    {
-        $randomizer = new Randomizer(new Mt19937($this->options->shardDistributionSeed));
-        /** @var list<Test> $tests */
-        $tests = $randomizer->shuffleArray($tests);
-
-        return array_values(array_filter($tests, static fn (int $i): bool => $i % $shards === $current, ARRAY_FILTER_USE_KEY));
-    }
-
-    /** @return list<TestSuite> */
-    private function extractClassSuites(TestSuite $suite): array
-    {
-        $classSuites = [];
-
-        foreach ($suite->tests() as $item) {
-            if (! ($item instanceof TestSuite)) {
-                continue;
-            }
-
-            $children = $item->tests();
-            if (
-                $children !== []
-                && $children[0] instanceof TestSuite
-                && ! ($children[0] instanceof DataProviderTestSuite)
-            ) {
-                $classSuites = array_merge($classSuites, $this->extractClassSuites($item));
-            } else {
-                $classSuites[] = $item;
+        // Items without tests, as test classes without test methods, belong to no group and are dropped
+        $itemGroups = [];
+        foreach ($items as $item) {
+            foreach ($this->workItems($item) as $workItem => $test) {
+                $itemGroups[$groups[$workItem]][spl_object_id($item)] = $item;
             }
         }
 
-        return $classSuites;
+        $itemGroups = array_values($itemGroups);
+
+        $shardedItemGroups = match ($this->options->shardDistribution) {
+            ShardDistribution::Sequential => array_slice($itemGroups, (int) ceil(count($itemGroups) / $shards) * $current, (int) ceil(count($itemGroups) / $shards)),
+            ShardDistribution::RoundRobin => array_values(array_filter($itemGroups, static fn (int $i): bool => $i % $shards === $current, ARRAY_FILTER_USE_KEY)),
+            ShardDistribution::Random => $this->randomShardTests($itemGroups, $shards, $current),
+            ShardDistribution::Duration => $this->durationShardTests($itemGroups, $shards, $current),
+        };
+
+        $suite->setTests(array_merge(...$shardedItemGroups));
+    }
+
+    /**
+     * @param list<array<int, Test>> $itemGroups
+     *
+     * @return list<array<int, Test>>
+     */
+    private function randomShardTests(array $itemGroups, int $shards, int $current): array
+    {
+        $randomizer = new Randomizer(new Mt19937($this->options->shardDistributionSeed));
+        /** @var list<array<int, Test>> $itemGroups */
+        $itemGroups = $randomizer->shuffleArray($itemGroups);
+
+        return array_values(array_filter($itemGroups, static fn (int $i): bool => $i % $shards === $current, ARRAY_FILTER_USE_KEY));
+    }
+
+    /**
+     * Longest processing time first: each group, slowest first, goes to the shard with the least total duration so far.
+     * Durations come from the test run history; a test missing from it weighs the mean known duration, or 1 when no
+     * duration is known, which balances the shards by test count. Every shard computes the same assignment only as long
+     * as all of them read the same test run history.
+     *
+     * @param list<array<int, Test>> $itemGroups
+     *
+     * @return list<array<int, Test>>
+     */
+    private function durationShardTests(array $itemGroups, int $shards, int $current): array
+    {
+        $testRunHistory = $this->testRunHistory();
+
+        $knownDurations    = [];
+        $groupDurations    = [];
+        $groupUnknownTests = [];
+        foreach ($itemGroups as $index => $itemGroup) {
+            $groupDurations[$index]    = 0.0;
+            $groupUnknownTests[$index] = 0;
+            foreach ($itemGroup as $item) {
+                foreach ($this->durations($item, $testRunHistory) as $duration) {
+                    // The history gives no duration as 0
+                    if ($duration > 0.0) {
+                        $knownDurations[]        = $duration;
+                        $groupDurations[$index] += $duration;
+                    } else {
+                        ++$groupUnknownTests[$index];
+                    }
+                }
+            }
+        }
+
+        $unknownDuration = $knownDurations === [] ? 1.0 : array_sum($knownDurations) / count($knownDurations);
+        foreach ($groupUnknownTests as $index => $unknownTests) {
+            $groupDurations[$index] += $unknownTests * $unknownDuration;
+        }
+
+        $slowestFirst = array_keys($groupDurations);
+        usort(
+            $slowestFirst,
+            static fn (int $left, int $right): int => [$groupDurations[$right], $left] <=> [$groupDurations[$left], $right],
+        );
+
+        $shardDurations = array_fill(0, $shards, 0.0);
+        assert($shardDurations !== []);
+        $currentGroups = [];
+        foreach ($slowestFirst as $index) {
+            $shard = array_search(min($shardDurations), $shardDurations, true);
+            assert(is_int($shard));
+            $shardDurations[$shard] += $groupDurations[$index];
+            if ($shard !== $current) {
+                continue;
+            }
+
+            $currentGroups[$index] = $itemGroups[$index];
+        }
+
+        ksort($currentGroups);
+
+        return array_values($currentGroups);
+    }
+
+    /** @return list<float> */
+    private function durations(Test $test, TestRunHistory $testRunHistory): array
+    {
+        if ($test instanceof TestSuite) {
+            $durations = [];
+            foreach ($test->tests() as $childTest) {
+                $durations = array_merge($durations, $this->durations($childTest, $testRunHistory));
+            }
+
+            return $durations;
+        }
+
+        if ($test instanceof Reorderable) {
+            return [$testRunHistory->time(TestRunHistoryId::fromReorderable($test))];
+        }
+
+        return [];
+    }
+
+    private function testRunHistory(): TestRunHistory
+    {
+        if (! $this->options->configuration->recordTestRunHistory()) {
+            return new NullTestRunHistory();
+        }
+
+        $testRunHistory = new DefaultTestRunHistory($this->options->configuration->testRunHistoryFile());
+        $testRunHistory->load();
+
+        return $testRunHistory;
+    }
+
+    /**
+     * Files are test classes and PHPT tests, the latter wrapped in a suite when repeated or retried
+     *
+     * @return list<Test>
+     */
+    private function extractFiles(TestSuite $suite): array
+    {
+        $files = [];
+
+        foreach ($suite->tests() as $item) {
+            if ($item instanceof TestSuite && ! $item->isForTestClass() && ! ($item instanceof IterativeTestSuite)) {
+                $files = array_merge($files, $this->extractFiles($item));
+            } else {
+                $files[] = $item;
+            }
+        }
+
+        return $files;
     }
 
     /** @return list<Test> */
@@ -301,7 +416,7 @@ final readonly class SuiteLoader
         $suiteItems     = $suite->tests();
 
         foreach ($suiteItems as $item) {
-            if ($item instanceof TestSuite) {
+            if ($item instanceof TestSuite && ! ($item instanceof IterativeTestSuite)) {
                 $extractedTests = array_merge($extractedTests, $this->extractTestsInSuite($item));
             } else {
                 $extractedTests[] = $item;

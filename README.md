@@ -119,6 +119,55 @@ public function setUp(): void
 }
 ```
 
+## Test dependencies
+
+Tests depending on each other, through `#[Depends]`, `#[DependsExternal]`, `#[DependsOnClass]` and their variants,
+run in the same process and in dependency order, as PHPUnit does: this applies to tests in different files, with
+`--functional`, and with `--shard` too. Every test linked by dependencies, directly or not, runs in the same process:
+large groups of dependent tests reduce the parallelism.
+
+## Sharding
+
+To split a test suite across several machines, e.g. CI jobs, run each one with `--shard=<current>/<total>`:
+
+```
+vendor/bin/paratest --shard=1/3   # on the first machine
+vendor/bin/paratest --shard=2/3   # on the second machine
+vendor/bin/paratest --shard=3/3   # on the third machine
+```
+
+How tests are split depends on `--shard-test-distribution`:
+
+* `sequential` (default): consecutive files, or tests with `--functional`, go to the same shard
+* `round-robin`: files, or tests, are dealt to the shards in turn
+* `random`: as `round-robin` after shuffling them with `--shard-test-distribution-seed`, `0` by default
+* `duration`: shards take about the same time, based on how long each test took in previous runs
+
+The `duration` distribution reads the durations PHPUnit records in its test run history, which is the
+`test-run-history` file in the `--cache-directory`, or `.phpunit.result.cache` next to the configuration file
+when no cache directory is set. Tests missing from the history count as taking the mean recorded duration;
+without any history, the shards get the same number of tests.
+
+**Every shard must read the same history file**: each shard computes the whole distribution on its own, so shards
+reading different histories may skip or run twice some tests. On CI, restore the same history in all shard jobs,
+for example from a single cache entry, and do not let the shards of the same run save their updated history over it.
+
+## Retrying and repeating tests
+
+PHPUnit's `--retry` and `--repeat` options work the same way with ParaTest:
+
+```
+vendor/bin/paratest --retry 3   # attempt each test up to 3 times, stopping at the first success
+vendor/bin/paratest --repeat 5  # run each test 5 times, stopping at the first failure
+```
+
+When both are given, `--repeat` takes precedence, as in PHPUnit.
+
+Note that a test that fails and then passes under `--retry` is logged to JUnit as a single passing
+`<testcase>` named `... (attempt 2 of 3)`, with no `<failure>` element and the failed attempts'
+durations included in its `time`. This is PHPUnit's behaviour: CI tools reading the JUnit report
+will see such a test as a plain success.
+
 ## Troubleshooting
 
 If you run into problems with `paratest`, try to get more information about the issue by enabling debug output via

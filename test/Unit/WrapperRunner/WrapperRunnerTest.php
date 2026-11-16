@@ -17,9 +17,14 @@ use PHPUnit\Framework\Attributes\CoversClass;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\Attributes\RequiresOperatingSystemFamily;
+use ReflectionProperty;
 use RuntimeException;
 use SebastianBergmann\CodeCoverage\Report\Facade as CoverageReportFacade;
 use SebastianBergmann\CodeCoverage\Serialization\Unserializer;
+use SebastianBergmann\CodeCoverage\StaticAnalysis\CachingSourceAnalyser;
+use SebastianBergmann\CodeCoverage\StaticAnalysis\FileAnalyser;
+use SebastianBergmann\CodeCoverage\StaticAnalysis\Registry as StaticAnalysisRegistry;
+use SplFileInfo;
 use Symfony\Component\Process\Process;
 
 use function array_diff;
@@ -27,7 +32,9 @@ use function array_intersect;
 use function array_merge;
 use function array_reverse;
 use function array_unique;
+use function copy;
 use function count;
+use function dirname;
 use function explode;
 use function file_get_contents;
 use function file_put_contents;
@@ -44,12 +51,16 @@ use function simplexml_load_string;
 use function sort;
 use function sprintf;
 use function str_replace;
+use function strlen;
 use function substr;
+use function substr_count;
+use function ucfirst;
 use function uniqid;
 use function unlink;
 
 use const DIRECTORY_SEPARATOR;
 use const FIXTURES;
+use const PHP_BINARY;
 use const PHP_EOL;
 
 /** @internal */
@@ -718,6 +729,22 @@ final class WrapperRunnerTest extends TestBase
         self::assertSame(1, $coverageSummary->numberOfExecutedLines());
     }
 
+    public function testCoverageReportUsesStaticAnalysisCache(): void
+    {
+        $this->bareOptions['path']              = $this->fixture('common_results' . DIRECTORY_SEPARATOR . 'SuccessTest.php');
+        $this->bareOptions['--coverage-php']    = $this->tmpDir . DIRECTORY_SEPARATOR . uniqid('result_');
+        $this->bareOptions['--coverage-filter'] = $this->fixture('common_results');
+        $this->bareOptions['--cache-directory'] = $this->tmpDir;
+
+        $runnerResult = $this->runRunner();
+        self::assertSame(RunnerInterface::SUCCESS_EXIT, $runnerResult->exitCode);
+
+        $fileAnalyser   = StaticAnalysisRegistry::analyser($this->tmpDir . DIRECTORY_SEPARATOR . 'code-coverage', true, false);
+        $sourceAnalyser = (new ReflectionProperty(FileAnalyser::class, 'sourceAnalyser'))->getValue($fileAnalyser);
+        self::assertInstanceOf(CachingSourceAnalyser::class, $sourceAnalyser);
+        self::assertSame(7, $sourceAnalyser->cacheHits());
+    }
+
     public function testHandleCollisionWithSymfonyOutput(): void
     {
         $this->bareOptions['path'] = $this->fixture('symfony_output_collision' . DIRECTORY_SEPARATOR . 'FailingSymfonyOutputCollisionTest.php');
@@ -839,6 +866,198 @@ Processes:     2
 Runtime:       PHP %s
 
 ....                                                                4 / 4 (100%)
+
+Time: %s, Memory: %s MB
+
+OK%a
+EOF;
+        self::assertStringMatchesFormat($expectedOutput, $runnerResult->output);
+        self::assertSame(RunnerInterface::SUCCESS_EXIT, $runnerResult->exitCode);
+    }
+
+    public function testSameEndOfName(): void
+    {
+        $this->bareOptions['path']         = $this->fixture('same_end_of_name');
+        $this->bareOptions['--functional'] = true;
+
+        $runnerResult = $this->runRunner();
+
+        $expectedOutput = <<<'EOF'
+Processes:     2
+Runtime:       PHP %s
+
+......                                                              6 / 6 (100%)
+
+Time: %s, Memory: %s MB
+
+OK%a
+EOF;
+        self::assertStringMatchesFormat($expectedOutput, $runnerResult->output);
+        self::assertSame(RunnerInterface::SUCCESS_EXIT, $runnerResult->exitCode);
+    }
+
+    public function testFunctionalRunsRepeatedAndRetriedTestsAsOftenAsPhpunit(): void
+    {
+        $outputFile = $this->tmpDir . DIRECTORY_SEPARATOR . 'test-output.xml';
+
+        $this->bareOptions['path']         = $this->fixture('repeat_retry');
+        $this->bareOptions['--functional'] = true;
+        $this->bareOptions['--log-junit']  = $outputFile;
+
+        $runnerResult = $this->runRunner();
+
+        self::assertSame(RunnerInterface::SUCCESS_EXIT, $runnerResult->exitCode);
+        // The printed summary also counts the outer PHPUnit run; the JUnit log holds only this run
+        self::assertSame(11, TestSuite::fromFile(new SplFileInfo($outputFile))->tests);
+    }
+
+    #[DataProvider('provideFunctional')]
+    public function testRetryMakesAFlakyTestPass(bool $functional): void
+    {
+        $this->bareOptions['path']         = $this->fixture('retry_repeat_cli' . DIRECTORY_SEPARATOR . 'FlakyTest.php');
+        $this->bareOptions['--functional'] = $functional;
+
+        $resultWithoutRetry = $this->runRunner();
+
+        $this->bareOptions['--retry'] = '2';
+        $resultWithRetry              = $this->runRunner();
+
+        self::assertSame(RunnerInterface::FAILURE_EXIT, $resultWithoutRetry->exitCode);
+        self::assertSame(RunnerInterface::SUCCESS_EXIT, $resultWithRetry->exitCode);
+    }
+
+    public function testRetryIsRecordedAsASinglePassingTestInJunit(): void
+    {
+        $outputFile = $this->tmpDir . DIRECTORY_SEPARATOR . 'test-output.xml';
+
+        $this->bareOptions['path']        = $this->fixture('retry_repeat_cli' . DIRECTORY_SEPARATOR . 'FlakyTest.php');
+        $this->bareOptions['--retry']     = '2';
+        $this->bareOptions['--log-junit'] = $outputFile;
+
+        self::assertSame(RunnerInterface::SUCCESS_EXIT, $this->runRunner()->exitCode);
+
+        $junit = TestSuite::fromFile(new SplFileInfo($outputFile));
+        self::assertSame(1, $junit->tests);
+        self::assertSame(0, $junit->failures);
+    }
+
+    public function testRetryStillReportsATestThatAlwaysFails(): void
+    {
+        $outputFile = $this->tmpDir . DIRECTORY_SEPARATOR . 'test-output.xml';
+
+        $this->bareOptions['path']        = $this->fixture('common_results' . DIRECTORY_SEPARATOR . 'FailureTest.php');
+        $this->bareOptions['--retry']     = '3';
+        $this->bareOptions['--log-junit'] = $outputFile;
+
+        self::assertSame(RunnerInterface::FAILURE_EXIT, $this->runRunner()->exitCode);
+
+        $junit = TestSuite::fromFile(new SplFileInfo($outputFile));
+        self::assertSame(1, $junit->tests);
+        self::assertSame(1, $junit->failures);
+    }
+
+    public function testRepeatTakesPrecedenceOverRetry(): void
+    {
+        $process = $this->runParatestProcess('--repeat=2', '--retry=2');
+
+        self::assertSame(RunnerInterface::FAILURE_EXIT, $process->getExitCode());
+        self::assertStringContainsString('Options --repeat and --retry cannot be used together', $process->getOutput());
+        // The main process and the worker trigger the same warning: it is reported once, as by PHPUnit
+        self::assertStringContainsString('Tests: 2, Assertions: 1, Failures: 1, PHPUnit Warnings: 1, Skipped: 1.', $process->getOutput());
+    }
+
+    public function testInvalidRetryValueIsIgnored(): void
+    {
+        $process = $this->runParatestProcess('--retry=abc');
+
+        self::assertSame(RunnerInterface::FAILURE_EXIT, $process->getExitCode());
+        self::assertStringContainsString('Option "--retry abc" ignored because "abc" is not a positive integer', $process->getOutput());
+        self::assertStringContainsString('Tests: 1, Assertions: 1, Failures: 1, PHPUnit Warnings: 1.', $process->getOutput());
+    }
+
+    /**
+     * Invalid or conflicting --retry/--repeat values trigger PHPUnit warnings: run ParaTest in its own
+     * process on the flaky fixture so that those warnings do not leak into this test run
+     *
+     * @param non-empty-string ...$options
+     */
+    private function runParatestProcess(string ...$options): Process
+    {
+        $process = new Process([
+            PHP_BINARY,
+            dirname(__DIR__, 3) . DIRECTORY_SEPARATOR . 'bin' . DIRECTORY_SEPARATOR . 'paratest',
+            '--no-configuration',
+            ...$options,
+            $this->fixture('retry_repeat_cli' . DIRECTORY_SEPARATOR . 'FlakyTest.php'),
+        ]);
+        $process->run();
+
+        return $process;
+    }
+
+    /** @return iterable<string, array{non-empty-string, bool, int}> */
+    public static function provideRepeat(): iterable
+    {
+        yield 'test file' => ['retry_repeat_cli' . DIRECTORY_SEPARATOR . 'PlainTest.php', false, 6];
+        yield 'test file, functional' => ['retry_repeat_cli' . DIRECTORY_SEPARATOR . 'PlainTest.php', true, 6];
+        yield 'phpt file' => ['phpt', false, 3];
+        yield 'data providers, functional' => ['function_parallelization_tests', true, 60];
+    }
+
+    /** @param non-empty-string $path */
+    #[DataProvider('provideRepeat')]
+    public function testRepeatRunsEachTestNTimes(string $path, bool $functional, int $expectedTests): void
+    {
+        $outputFile = $this->tmpDir . DIRECTORY_SEPARATOR . 'test-output.xml';
+
+        $this->bareOptions['path']         = $this->fixture($path);
+        $this->bareOptions['--functional'] = $functional;
+        $this->bareOptions['--repeat']     = '3';
+        $this->bareOptions['--log-junit']  = $outputFile;
+
+        self::assertSame(RunnerInterface::SUCCESS_EXIT, $this->runRunner()->exitCode);
+        self::assertSame($expectedTests, TestSuite::fromFile(new SplFileInfo($outputFile))->tests);
+    }
+
+    /** @return iterable<string, array{bool}> */
+    public static function provideFunctional(): iterable
+    {
+        yield 'per file' => [false];
+        yield 'functional' => [true];
+    }
+
+    #[DataProvider('provideFunctional')]
+    public function testRepeatWithShardsRunsEachTestNTimesAcrossShards(bool $functional): void
+    {
+        $outputFile = $this->tmpDir . DIRECTORY_SEPARATOR . 'test-output.xml';
+
+        $this->bareOptions['path']         = $this->fixture('multi_method_tests');
+        $this->bareOptions['--functional'] = $functional;
+        $this->bareOptions['--repeat']     = '2';
+        $this->bareOptions['--log-junit']  = $outputFile;
+
+        $tests = 0;
+        foreach (['1/2', '2/2'] as $shard) {
+            $this->bareOptions['--shard'] = $shard;
+            self::assertSame(RunnerInterface::SUCCESS_EXIT, $this->runRunner()->exitCode);
+            $tests += TestSuite::fromFile(new SplFileInfo($outputFile))->tests;
+        }
+
+        self::assertSame(28, $tests);
+    }
+
+    public function testLineFeedInDataSetName(): void
+    {
+        $this->bareOptions['path']         = $this->fixture('line_feed_in_data_set_name');
+        $this->bareOptions['--functional'] = true;
+
+        $runnerResult = $this->runRunner();
+
+        $expectedOutput = <<<'EOF'
+Processes:     2
+Runtime:       PHP %s
+
+...                                                                 3 / 3 (100%)
 
 Time: %s, Memory: %s MB
 
@@ -982,6 +1201,180 @@ EOF;
         $runnerResult = $this->runRunner();
 
         self::assertEquals(RunnerInterface::SUCCESS_EXIT, $runnerResult->exitCode, $runnerResult->output);
+    }
+
+    /** @param non-empty-string $processes */
+    #[DataProvider('provideProcessesAndFunctional')]
+    public function testDependenciesWithinAClassAreResolved(string $processes, bool $functional): void
+    {
+        $this->bareOptions['--configuration'] = $this->fixture('depends_intra_class' . DIRECTORY_SEPARATOR . 'phpunit.xml');
+        $this->bareOptions['--processes']     = $processes;
+        if ($functional) {
+            $this->bareOptions['--functional'] = true;
+        }
+
+        $runnerResult = $this->runRunner();
+
+        self::assertMatchesRegularExpression('/^\.{4} +4 \/ 4 \(100%\)$/m', $runnerResult->output);
+        self::assertEquals(RunnerInterface::SUCCESS_EXIT, $runnerResult->exitCode, $runnerResult->output);
+    }
+
+    public function testDependenciesWithinAClassAreNotResolvedWhenDisabled(): void
+    {
+        $this->bareOptions['--configuration'] = $this->fixture('depends_intra_class' . DIRECTORY_SEPARATOR . 'phpunit-ignore-dependencies.xml');
+        $this->bareOptions['--processes']     = '1';
+
+        $runnerResult = $this->runRunner();
+
+        self::assertMatchesRegularExpression('/^S\.S\. +4 \/ 4 \(100%\)$/m', $runnerResult->output);
+        self::assertEquals(RunnerInterface::SUCCESS_EXIT, $runnerResult->exitCode, $runnerResult->output);
+    }
+
+    /** @return iterable<string, array{non-empty-string, bool}> */
+    public static function provideProcessesAndFunctional(): iterable
+    {
+        yield 'one process' => ['1', false];
+        yield 'two processes' => ['2', false];
+        yield 'functional, one process' => ['1', true];
+        yield 'functional, a process per test' => ['4', true];
+    }
+
+    /**
+     * The fixture has 12 files and 15 tests: a process per work item spreads them all over different workers
+     *
+     * @param non-empty-string      $processes
+     * @param non-empty-string|null $maxBatchSize
+     */
+    #[DataProvider('provideDependenciesAcrossWorkItems')]
+    public function testDependenciesAcrossWorkItemsAreResolved(string $processes, bool $functional, ?string $maxBatchSize): void
+    {
+        $this->bareOptions['--configuration'] = $this->fixture('depends_across_items' . DIRECTORY_SEPARATOR . 'phpunit.xml');
+        $this->bareOptions['--processes']     = $processes;
+        if ($maxBatchSize !== null) {
+            $this->bareOptions['--max-batch-size'] = $maxBatchSize;
+        }
+
+        if ($functional) {
+            $this->bareOptions['--functional'] = true;
+        }
+
+        $runnerResult = $this->runRunner();
+
+        self::assertMatchesRegularExpression('/^\.{15} +15 \/ 15 \(100%\)$/m', $runnerResult->output);
+        self::assertEquals(RunnerInterface::SUCCESS_EXIT, $runnerResult->exitCode, $runnerResult->output);
+    }
+
+    /** @return iterable<string, array{non-empty-string, bool, non-empty-string|null}> */
+    public static function provideDependenciesAcrossWorkItems(): iterable
+    {
+        yield 'a process per file' => ['12', false, null];
+        yield 'a process per test' => ['15', true, null];
+        yield 'a process per file, max batch size 1' => ['12', false, '1'];
+        yield 'a process per test, max batch size 1' => ['15', true, '1'];
+        yield 'one process, max batch size 1' => ['1', false, '1'];
+        yield 'functional, one process, max batch size 1' => ['1', true, '1'];
+    }
+
+    /**
+     * As in a single PHPUnit process, a dependency running earlier in the natural order passes: only
+     * the 5 tests declared before their dependencies are skipped
+     *
+     * @param non-empty-string $processes
+     */
+    #[DataProvider('provideDependenciesAcrossWorkItemsWhenNotResolved')]
+    public function testDependenciesAcrossWorkItemsShareAWorkerWhenNotResolved(string $processes, bool $functional): void
+    {
+        $this->bareOptions['--configuration'] = $this->fixture('depends_across_items' . DIRECTORY_SEPARATOR . 'phpunit-ignore-dependencies.xml');
+        $this->bareOptions['--processes']     = $processes;
+        if ($functional) {
+            $this->bareOptions['--functional'] = true;
+        }
+
+        $runnerResult = $this->runRunner();
+
+        self::assertSame(1, preg_match('/^([.S]{15}) +15 \/ 15 \(100%\)$/m', $runnerResult->output, $matches), $runnerResult->output);
+        self::assertSame(5, substr_count($matches[1], 'S'), $runnerResult->output);
+        self::assertEquals(RunnerInterface::SUCCESS_EXIT, $runnerResult->exitCode, $runnerResult->output);
+    }
+
+    /** @return iterable<string, array{non-empty-string, bool}> */
+    public static function provideDependenciesAcrossWorkItemsWhenNotResolved(): iterable
+    {
+        yield 'a process per file' => ['12', false];
+        yield 'a process per test' => ['15', true];
+    }
+
+    /** @param non-empty-string $distribution */
+    #[DataProvider('provideShardsWithDependencies')]
+    public function testDependenciesAcrossWorkItemsAreResolvedInEachShard(string $distribution, int $totalShards, bool $functional): void
+    {
+        $this->bareOptions['--configuration']           = $this->fixture('depends_across_items' . DIRECTORY_SEPARATOR . 'phpunit.xml');
+        $this->bareOptions['--processes']               = '15';
+        $this->bareOptions['--shard-test-distribution'] = $distribution;
+        if ($functional) {
+            $this->bareOptions['--functional'] = true;
+        }
+
+        $executedTests = 0;
+        for ($shard = 1; $shard <= $totalShards; ++$shard) {
+            $this->bareOptions['--shard'] = $shard . '/' . $totalShards;
+
+            $runnerResult = $this->runRunner();
+
+            self::assertSame(1, preg_match('/^(\.*) +(\d+) \/ \2 \(100%\)$/m', $runnerResult->output, $matches), $runnerResult->output);
+            self::assertSame((int) $matches[2], strlen($matches[1]), $runnerResult->output);
+            self::assertEquals(RunnerInterface::SUCCESS_EXIT, $runnerResult->exitCode, $runnerResult->output);
+
+            $executedTests += (int) $matches[2];
+        }
+
+        self::assertSame(15, $executedTests);
+    }
+
+    /**
+     * As on CI: a full run records the history, then every shard starts from that same history
+     */
+    #[DataProvider('provideFunctional')]
+    public function testDurationShardsRunEveryTestOnce(bool $functional): void
+    {
+        $cacheDirectory = $this->tmpDir . DIRECTORY_SEPARATOR . 'cache';
+        $historyFile    = $cacheDirectory . DIRECTORY_SEPARATOR . 'test-run-history';
+        $historyBackup  = $this->tmpDir . DIRECTORY_SEPARATOR . 'test-run-history.backup';
+
+        $this->bareOptions['--configuration']   = $this->fixture('depends_across_items' . DIRECTORY_SEPARATOR . 'phpunit.xml');
+        $this->bareOptions['--cache-directory'] = $cacheDirectory;
+        $this->bareOptions['--functional']      = $functional;
+
+        self::assertSame(RunnerInterface::SUCCESS_EXIT, $this->runRunner()->exitCode);
+        self::assertTrue(copy($historyFile, $historyBackup));
+
+        $this->bareOptions['--shard-test-distribution'] = 'duration';
+
+        $executedTests = 0;
+        foreach (['1/3', '2/3', '3/3'] as $shard) {
+            self::assertTrue(copy($historyBackup, $historyFile));
+            $this->bareOptions['--shard'] = $shard;
+
+            $runnerResult = $this->runRunner();
+
+            self::assertSame(1, preg_match('/^(\.*) +(\d+) \/ \2 \(100%\)$/m', $runnerResult->output, $matches), $runnerResult->output);
+            self::assertSame(RunnerInterface::SUCCESS_EXIT, $runnerResult->exitCode, $runnerResult->output);
+
+            $executedTests += (int) $matches[2];
+        }
+
+        self::assertSame(15, $executedTests);
+    }
+
+    /** @return iterable<string, array{non-empty-string, int, bool}> */
+    public static function provideShardsWithDependencies(): iterable
+    {
+        foreach (['sequential', 'round-robin', 'random'] as $distribution) {
+            foreach ([2, 3] as $totalShards) {
+                yield "$distribution, $totalShards shards" => [$distribution, $totalShards, false];
+                yield "functional, $distribution, $totalShards shards" => [$distribution, $totalShards, true];
+            }
+        }
     }
 
     public function testOrderByCache(): void
@@ -1277,6 +1670,23 @@ EOF;
         self::assertEquals(RunnerInterface::FAILURE_EXIT, $runnerResult->exitCode);
     }
 
+    public function testSameIssueTriggeredInMultipleProcessesIsReportedOnce(): void
+    {
+        $this->bareOptions['path']                   = $this->fixture('same_issue_in_multiple_processes');
+        $this->bareOptions['--display-deprecations'] = true;
+        $this->bareOptions['--display-notices']      = true;
+        $this->bareOptions['--display-warnings']     = true;
+
+        $runnerResult = $this->runRunner();
+
+        self::assertStringContainsString('2 tests triggered 1 deprecation:', $runnerResult->output);
+        self::assertStringContainsString('2 tests triggered 1 notice:', $runnerResult->output);
+        self::assertStringContainsString('2 tests triggered 1 warning:', $runnerResult->output);
+        self::assertStringContainsString('SecondTest::testIssues (2 times)', $runnerResult->output);
+        self::assertStringContainsString('Warnings: 1, Deprecations: 1, Notices: 1', $runnerResult->output);
+        self::assertSame(RunnerInterface::SUCCESS_EXIT, $runnerResult->exitCode);
+    }
+
     public function testProcessIsolation(): void
     {
         $this->bareOptions['path']                = $this->fixture('process_isolation' . DIRECTORY_SEPARATOR . 'FooTest.php');
@@ -1284,6 +1694,95 @@ EOF;
 
         $runnerResult = $this->runRunner();
         self::assertSame(RunnerInterface::SUCCESS_EXIT, $runnerResult->exitCode);
+    }
+
+    /** @return iterable<string, array{list<non-empty-string>, ?non-empty-string, int}> */
+    public static function provideFailOnDeprecationByTrigger(): iterable
+    {
+        $triggers = ['self', 'direct', 'indirect'];
+
+        foreach ($triggers as $failOn) {
+            foreach ($triggers as $test) {
+                $exitCode = $failOn === $test ? RunnerInterface::FAILURE_EXIT : RunnerInterface::SUCCESS_EXIT;
+
+                yield "fail on $failOn, $test deprecation" => [["--fail-on-$failOn-deprecation"], $test, $exitCode];
+            }
+
+            // All the tests run, each kind of deprecation in a different process
+            yield "fail on $failOn, all deprecations" => [["--fail-on-$failOn-deprecation"], null, RunnerInterface::FAILURE_EXIT];
+        }
+
+        foreach ($triggers as $doNotFailOn) {
+            foreach ($triggers as $test) {
+                $exitCode = $doNotFailOn === $test ? RunnerInterface::SUCCESS_EXIT : RunnerInterface::FAILURE_EXIT;
+
+                yield "do not fail on $doNotFailOn, $test deprecation" => [['--fail-on-deprecation', "--do-not-fail-on-$doNotFailOn-deprecation"], $test, $exitCode];
+            }
+        }
+
+        yield 'no option, all deprecations' => [[], null, RunnerInterface::SUCCESS_EXIT];
+        yield 'do not fail on any, all deprecations' => [
+            ['--fail-on-deprecation', '--do-not-fail-on-self-deprecation', '--do-not-fail-on-direct-deprecation', '--do-not-fail-on-indirect-deprecation'],
+            null,
+            RunnerInterface::SUCCESS_EXIT,
+        ];
+    }
+
+    /**
+     * @param list<non-empty-string> $options
+     * @param ?non-empty-string      $test
+     */
+    #[DataProvider('provideFailOnDeprecationByTrigger')]
+    public function testFailOnDeprecationByTrigger(array $options, ?string $test, int $expectedExitCode): void
+    {
+        $this->bareOptions['--configuration'] = $this->fixture('deprecation_triggers' . DIRECTORY_SEPARATOR . 'phpunit.xml');
+        if ($test !== null) {
+            $this->bareOptions['path'] = $this->fixture('deprecation_triggers' . DIRECTORY_SEPARATOR . 'tests' . DIRECTORY_SEPARATOR . ucfirst($test) . 'DeprecationTest.php');
+        }
+
+        foreach ($options as $option) {
+            $this->bareOptions[$option] = true;
+        }
+
+        $runnerResult = $this->runRunner();
+
+        self::assertSame($expectedExitCode, $runnerResult->exitCode, $runnerResult->output);
+    }
+
+    /** @return iterable<string, array{bool, ?non-empty-string, non-empty-string, int}> */
+    public static function provideExcludeFilter(): iterable
+    {
+        foreach (['per file' => false, 'functional' => true] as $mode => $functional) {
+            // testTwo, testThree, testTen, testTwelve and testThirteen are excluded
+            yield "$mode, exclude filter only" => [$functional, null, 'testT', 9];
+            yield "$mode, with filter" => [$functional, 'AlphaTest', 'testTwo', 2];
+            yield "$mode, excluding whole classes" => [$functional, null, 'AlphaTest|BravoTest', 9];
+        }
+    }
+
+    /**
+     * @param ?non-empty-string $filter
+     * @param non-empty-string  $excludeFilter
+     */
+    #[DataProvider('provideExcludeFilter')]
+    public function testExcludeFilter(bool $functional, ?string $filter, string $excludeFilter, int $expectedTests): void
+    {
+        $outputFile = $this->tmpDir . DIRECTORY_SEPARATOR . 'test-output.xml';
+
+        $this->bareOptions['path']             = $this->fixture('multi_method_tests');
+        $this->bareOptions['--functional']     = $functional;
+        $this->bareOptions['--exclude-filter'] = $excludeFilter;
+        $this->bareOptions['--log-junit']      = $outputFile;
+        if ($filter !== null) {
+            $this->bareOptions['--filter'] = $filter;
+        }
+
+        $runnerResult = $this->runRunner();
+
+        self::assertStringContainsString(sprintf('%1$s / %1$s (100%%)', $expectedTests), $runnerResult->output);
+        // The workers must exclude the same tests the progress counts, or they run more of them
+        self::assertSame($expectedTests, TestSuite::fromFile(new SplFileInfo($outputFile))->tests);
+        self::assertSame(RunnerInterface::SUCCESS_EXIT, $runnerResult->exitCode, $runnerResult->output);
     }
 
     private static function sorted(string $from): string

@@ -63,11 +63,15 @@ final readonly class Options
         'configuration' => true,
         'coverage-filter' => true,
         'do-not-report-useless-tests' => true,
+        'exclude-filter' => true,
         'exclude-group' => true,
         'fail-on-empty-test-suite' => true,
         'fail-on-warning' => true,
         'fail-on-risky' => true,
         'fail-on-deprecation' => true,
+        'fail-on-self-deprecation' => true,
+        'fail-on-direct-deprecation' => true,
+        'fail-on-indirect-deprecation' => true,
         'fail-on-phpunit-deprecation' => true,
         'fail-on-phpunit-notice' => true,
         'fail-on-phpunit-warning' => true,
@@ -79,6 +83,9 @@ final readonly class Options
         'do-not-fail-on-warning' => true,
         'do-not-fail-on-risky' => true,
         'do-not-fail-on-deprecation' => true,
+        'do-not-fail-on-self-deprecation' => true,
+        'do-not-fail-on-direct-deprecation' => true,
+        'do-not-fail-on-indirect-deprecation' => true,
         'do-not-fail-on-phpunit-deprecation' => true,
         'do-not-fail-on-phpunit-notice' => true,
         'do-not-fail-on-phpunit-warning' => true,
@@ -91,6 +98,8 @@ final readonly class Options
         'order-by' => true,
         'process-isolation' => true,
         'random-order-seed' => true,
+        'repeat' => true,
+        'retry' => true,
         'stop-on-defect' => true,
         'stop-on-error' => true,
         'stop-on-failure' => true,
@@ -192,9 +201,7 @@ final readonly class Options
         unset($options['functional']);
 
         assert(array_key_exists('colors', $options));
-        if ($options['colors'] === Configuration::COLOR_DEFAULT) {
-            unset($options['colors']);
-        } elseif ($options['colors'] === null) {
+        if ($options['colors'] === null) {
             $options['colors'] = Configuration::COLOR_AUTO;
         }
 
@@ -458,6 +465,12 @@ final readonly class Options
                 '@see PHPUnit guide, chapter: ' . $chapter,
             ),
             new InputOption(
+                'exclude-filter',
+                null,
+                InputOption::VALUE_REQUIRED,
+                '@see PHPUnit guide, chapter: ' . $chapter,
+            ),
+            new InputOption(
                 'process-isolation',
                 null,
                 InputOption::VALUE_NONE,
@@ -579,6 +592,24 @@ final readonly class Options
                 '@see PHPUnit guide, chapter: ' . $chapter,
             ),
             new InputOption(
+                'fail-on-self-deprecation',
+                null,
+                InputOption::VALUE_NONE,
+                '@see PHPUnit guide, chapter: ' . $chapter,
+            ),
+            new InputOption(
+                'fail-on-direct-deprecation',
+                null,
+                InputOption::VALUE_NONE,
+                '@see PHPUnit guide, chapter: ' . $chapter,
+            ),
+            new InputOption(
+                'fail-on-indirect-deprecation',
+                null,
+                InputOption::VALUE_NONE,
+                '@see PHPUnit guide, chapter: ' . $chapter,
+            ),
+            new InputOption(
                 'fail-on-phpunit-deprecation',
                 null,
                 InputOption::VALUE_NONE,
@@ -645,6 +676,24 @@ final readonly class Options
                 '@see PHPUnit guide, chapter: ' . $chapter,
             ),
             new InputOption(
+                'do-not-fail-on-self-deprecation',
+                null,
+                InputOption::VALUE_NONE,
+                '@see PHPUnit guide, chapter: ' . $chapter,
+            ),
+            new InputOption(
+                'do-not-fail-on-direct-deprecation',
+                null,
+                InputOption::VALUE_NONE,
+                '@see PHPUnit guide, chapter: ' . $chapter,
+            ),
+            new InputOption(
+                'do-not-fail-on-indirect-deprecation',
+                null,
+                InputOption::VALUE_NONE,
+                '@see PHPUnit guide, chapter: ' . $chapter,
+            ),
+            new InputOption(
                 'do-not-fail-on-phpunit-deprecation',
                 null,
                 InputOption::VALUE_NONE,
@@ -693,11 +742,23 @@ final readonly class Options
                 '@see PHPUnit guide, chapter: ' . $chapter,
             ),
             new InputOption(
+                'repeat',
+                null,
+                InputOption::VALUE_REQUIRED,
+                '@see PHPUnit guide, chapter: ' . $chapter,
+            ),
+            new InputOption(
+                'retry',
+                null,
+                InputOption::VALUE_REQUIRED,
+                '@see PHPUnit guide, chapter: ' . $chapter,
+            ),
+            new InputOption(
                 'colors',
                 null,
                 InputOption::VALUE_OPTIONAL,
                 '@see PHPUnit guide, chapter: ' . $chapter = 'Reporting',
-                Configuration::COLOR_DEFAULT,
+                false,
             ),
             new InputOption(
                 'no-progress',
