@@ -23,8 +23,6 @@ use PHPUnit\Runner\Extension\ExtensionFacade;
 use PHPUnit\Runner\Extension\PharLoader;
 use PHPUnit\Runner\Filter\Factory;
 use PHPUnit\Runner\GarbageCollection\GarbageCollectionHandler;
-use PHPUnit\Runner\TestRunHistory\DefaultTestRunHistory;
-use PHPUnit\Runner\TestRunHistory\TestRunHistoryHandler;
 use PHPUnit\Runner\TestSuiteLoader;
 use PHPUnit\Runner\TestSuiteSorter;
 use PHPUnit\TestRunner\IssueFilter;
@@ -226,11 +224,7 @@ final class ApplicationForWrapperWorker
         DeprecationCollector::init();
 
         if (isset($this->resultCacheFile)) {
-            new TestRunHistoryHandler(
-                new DefaultTestRunHistory($this->resultCacheFile),
-                EventFacade::instance(),
-                false,
-            );
+            TestRunHistoryFactory::handler($this->resultCacheFile);
         }
 
         if ($this->configuration->controlGarbageCollector()) {

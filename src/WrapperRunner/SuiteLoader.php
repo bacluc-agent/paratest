@@ -17,10 +17,7 @@ use PHPUnit\Runner\Extension\ExtensionBootstrapper;
 use PHPUnit\Runner\Extension\ExtensionFacade;
 use PHPUnit\Runner\Extension\PharLoader;
 use PHPUnit\Runner\Phpt\TestCase as PhptTestCase;
-use PHPUnit\Runner\TestRunHistory\DefaultTestRunHistory;
-use PHPUnit\Runner\TestRunHistory\NullTestRunHistory;
 use PHPUnit\Runner\TestRunHistory\TestRunHistory;
-use PHPUnit\Runner\TestRunHistory\TestRunHistoryId;
 use PHPUnit\Runner\TestSuiteSorter;
 use PHPUnit\TestRunner\TestResult\Facade as TestResultFacade;
 use PHPUnit\TextUI\Command\Result;
@@ -134,7 +131,7 @@ final readonly class SuiteLoader
                 $this->options->configuration->resolveDependencies(),
             );
             if (! $pipeline->isEmpty()) {
-                (new TestSuiteSorter($this->testRunHistory()))->apply($testSuite, $pipeline);
+                (new TestSuiteSorter(TestRunHistoryFactory::forConfiguration($this->options->configuration)))->apply($testSuite, $pipeline);
             }
         }
 
@@ -371,7 +368,7 @@ final readonly class SuiteLoader
         }
 
         if ($test instanceof Reorderable) {
-            return [$testRunHistory->time(TestRunHistoryId::fromReorderable($test))];
+            return [TestRunHistoryFactory::durationFor($testRunHistory, $test)];
         }
 
         return [];
@@ -379,14 +376,7 @@ final readonly class SuiteLoader
 
     private function testRunHistory(): TestRunHistory
     {
-        if (! $this->options->configuration->recordTestRunHistory()) {
-            return new NullTestRunHistory();
-        }
-
-        $testRunHistory = new DefaultTestRunHistory($this->options->configuration->testRunHistoryFile());
-        $testRunHistory->load();
-
-        return $testRunHistory;
+        return TestRunHistoryFactory::forConfiguration($this->options->configuration);
     }
 
     /**
