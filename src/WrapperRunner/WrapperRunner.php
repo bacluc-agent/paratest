@@ -17,7 +17,6 @@ use PHPUnit\Logging\TestDox\HtmlRenderer as TestDoxHtmlRenderer;
 use PHPUnit\Logging\TestDox\PlainTextRenderer as TestDoxPlainTextRenderer;
 use PHPUnit\Logging\TestDox\TestResultCollection as TestDoxTestResultCollection;
 use PHPUnit\Runner\CodeCoverage;
-use PHPUnit\Runner\TestRunHistory\DefaultTestRunHistory;
 use PHPUnit\TestRunner\TestResult\Facade as TestResultFacade;
 use PHPUnit\TestRunner\TestResult\Issues\Issue;
 use PHPUnit\TestRunner\TestResult\TestResult;
@@ -391,9 +390,9 @@ final class WrapperRunner implements RunnerInterface
         }
 
         if ($this->options->configuration->recordTestRunHistory()) {
-            $resultCacheSum = new DefaultTestRunHistory($this->options->configuration->testRunHistoryFile());
+            $resultCacheSum = TestRunHistoryFactory::forFile($this->options->configuration->testRunHistoryFile());
             foreach ($this->resultCacheFiles as $resultCacheFile) {
-                $resultCache = new DefaultTestRunHistory($resultCacheFile->getPathname());
+                $resultCache = TestRunHistoryFactory::forFile($resultCacheFile->getPathname());
                 $resultCache->load();
 
                 $resultCacheSum->mergeWith($resultCache);

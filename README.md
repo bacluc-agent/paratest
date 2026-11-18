@@ -29,6 +29,10 @@ This is because of the following reasons:
 1. To reduce bugs, code duplication and incompatibilities with PHPUnit, from version 5 ParaTest heavily relies on PHPUnit `@internal` classes
 1. The fast pace both PHP and PHPUnit have taken recently adds too much maintenance burden, which we can only afford for the latest versions to stay up-to-date
 
+## PHPUnit compatibility
+
+ParaTest must use PHPUnit's `@internal` test-run-history APIs for retry/repeat, dependency resolution and duration-based test sharding; PHPUnit exposes no public equivalent. PHPUnit may change these internals in any minor release (13.3 removed `NullResultCache`, which 7.24.0 migrated to `TestRunHistory`). All construction of these types is isolated in `ParaTest\WrapperRunner\TestRunHistoryFactory`, so adapting to such a change is a one-file change. This is not a public extension point: downstream projects must pair compatible ParaTest and PHPUnit versions via their Composer constraint.
+
 # Usage
 
 After installation, the binary can be found at `vendor/bin/paratest`. Run it
